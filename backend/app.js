@@ -1,0 +1,578 @@
+const fs = require('fs');
+const path = require('path');
+const express = require('express');
+const cors = require('cors');
+const http = require('http');
+const WebSocket = require('ws');
+const { spawn } = require('child_process');
+const pty = require('node-pty');
+const os = require('os');
+
+const axios = require('axios');
+const cheerio = require('cheerio');
+const app = express();
+const port = 3000;
+app.use(cors());
+app.use(express.json());
+
+
+const WORKSPACE_DIR = path.resolve('./workspace');
+if (!fs.existsSync(WORKSPACE_DIR)) fs.mkdirSync(WORKSPACE_DIR);
+
+const tool_schemas = [
+    {
+        type: "function",
+        function: {
+            name: "list_files",
+            description: "List files and directories in a given path relative to the workspace.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: { type: "string", description: "The relative path to list." }
+                }
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "read_file",
+            description: "Read the content of a file.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: { type: "string", description: "The relative path of the file to read." }
+                },
+                required: ["path"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "write_file",
+            description: "Write content to a file.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: { type: "string", description: "The relative path of the file to write." },
+                    content: { type: "string", description: "The content to write to the file." }
+                },
+                required: ["path", "content"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "delete_file",
+            description: "Delete a file.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: { type: "string", description: "The relative path of the file to delete." }
+                },
+                required: ["path"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "execute_command",
+            description: "Execute a terminal command in the workspace.",
+            parameters: {
+                type: "object",
+                properties: {
+                    command: { type: "string", description: "The command to execute." }
+                },
+                required: ["command"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "fetch_url",
+            description: "Fetch the HTML content of a URL and parse it to text.",
+            parameters: {
+                type: "object",
+                properties: {
+                    url: { type: "string", description: "The URL to fetch." }
+                },
+                required: ["url"]
+            }
+        }
+    }
+];
+
+const tools = {
+    list_files: async ({ path: relPath = '.' }) => {
+        const fullPath = path.join(WORKSPACE_DIR, relPath);
+        if (!fullPath.startsWith(WORKSPACE_DIR)) throw new Error("Access denied");
+        return fs.readdirSync(fullPath).map(name => {
+            const stats = fs.statSync(path.join(fullPath, name));
+            return { name, type: stats.isDirectory() ? 'folder' : 'file' };
+        });
+    },
+    read_file: async ({ path: relPath }) => {
+        const fullPath = path.join(WORKSPACE_DIR, relPath);
+        if (!fullPath.startsWith(WORKSPACE_DIR)) throw new Error("Access denied");
+        return fs.readFileSync(fullPath, 'utf8');
+    },
+    write_file: async ({ path: relPath, content }) => {
+        const fullPath = path.join(WORKSPACE_DIR, relPath);
+        if (!fullPath.startsWith(WORKSPACE_DIR)) throw new Error("Access denied");
+
+        let originalContent = null;
+        if (fs.existsSync(fullPath)) {
+            originalContent = fs.readFileSync(fullPath, 'utf8');
+        }
+
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, content, 'utf8');
+        return { message: "File saved successfully", originalContent };
+    },
+    delete_file: async ({ path: relPath }) => {
+        const fullPath = path.join(WORKSPACE_DIR, relPath);
+        if (!fullPath.startsWith(WORKSPACE_DIR)) throw new Error("Access denied");
+        let originalContent = null;
+        if (fs.existsSync(fullPath)) {
+            originalContent = fs.readFileSync(fullPath, 'utf8');
+            fs.unlinkSync(fullPath);
+        }
+        return { message: "File deleted successfully", originalContent };
+    },
+    execute_command: async ({ command }, onData) => {
+        return new Promise((resolve) => {
+            const isWin = os.platform() === 'win32';
+            const shell = isWin ? 'powershell.exe' : 'bash';
+            const child = spawn(shell, [isWin ? '-Command' : '-c', command], { cwd: WORKSPACE_DIR });
+            let output = '';
+
+            child.stdout.on('data', d => {
+                const chunk = d.toString();
+                output += chunk;
+                if (onData) onData(chunk);
+            });
+
+            child.stderr.on('data', d => {
+                const chunk = d.toString();
+                output += chunk;
+                if (onData) onData(chunk);
+            });
+
+            child.on('close', (code) => {
+                resolve({ output: output || 'Command executed with no output.', code });
+            });
+        });
+    },
+    fetch_url: async ({ url }) => {
+        try {
+            const response = await axios.get(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                },
+                timeout: 10000
+            });
+            const $ = cheerio.load(response.data);
+            $('script, style, nav, footer, header, noscript').remove();
+            const title = $('title').text() || url;
+            const text = $('body').text().replace(/\s+/g, ' ').trim();
+            return { title, text: text.substring(0, 50000), url };
+        } catch (err) {
+            throw new Error(`Failed to fetch URL: ${err.message}`);
+        }
+    }
+};
+
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+app.post('/api/fetch-url', async (req, res) => {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: "URL is required" });
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            },
+            timeout: 10000
+        });
+        const $ = cheerio.load(response.data);
+        $('script, style, nav, footer, header, noscript').remove();
+        const title = $('title').text() || url;
+        const text = $('body').text().replace(/\s+/g, ' ').trim();
+        res.json({ title, text: text.substring(0, 50000), url });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch URL", details: err.message });
+    }
+});
+
+app.post('/api/execute-tool', async (req, res) => {
+    const { tool_name, tool_args } = req.body;
+    if (!tool_name || !tool_args) return res.status(400).json({ error: "tool_name and tool_args are required" });
+
+    if (tool_name === 'execute_command') {
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+        });
+
+        const send = (data) => {
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        };
+
+        try {
+            const result = await tools.execute_command(tool_args, (chunk) => {
+                send({ type: 'output', content: chunk });
+            });
+            send({ type: 'result', content: result });
+            res.end();
+        } catch (err) {
+            send({ type: 'error', content: err.message });
+            res.end();
+        }
+        return;
+    }
+
+    try {
+        const result = await tools[tool_name](tool_args);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to execute tool", details: err.message });
+    }
+});
+
+app.post('/api/chat', async (req, res) => {
+    const { messages, model = 'Qwen3.5-35B-A3B-UD-Q2_K_XL.gguf', sources = [] } = req.body;
+    res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Transfer-Encoding': 'chunked',
+        'Connection': 'keep-alive',
+        'Cache-Control': 'no-cache'
+    });
+
+    try {
+        let systemPrompt = "You are a 'vibe coding' agent. Your primary role is to help the user with their workspace. You can use tools (like `write_file`) to implement code changes when requested. If the user's request is purely conversational (e.g., 'How are you?'), answer naturally without using tools. NEVER output code blocks (```language ... ```) in your responses; use the `write_file` tool if you need to show or write code. Focus on the 'vibe' of your actions.";
+        if (sources && sources.length > 0) {
+            const sourceText = sources.map(s => `SOURCE: ${s.url}\nTITLE: ${s.title}\nCONTENT: ${s.text}`).join('\n\n---\n\n');
+            systemPrompt += `\n\nReference sources provided by the user:\n\n${sourceText}`;
+        }
+        let currentMessages = [{ role: "system", content: systemPrompt }, ...messages];
+        let running = true;
+
+        while (running) {
+            let messageContent = '';
+            let reasoningContent = '';
+            let toolCalls = [];
+            let isThoughtOpen = false;
+
+            const localResponse = await fetch('http://localhost:8080/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    messages: currentMessages,
+                    model: model,
+                    tools: tool_schemas,
+                    tool_choice: 'auto',
+                    stream: true,
+                    stop: ["<|endoftext|>", "</s>", "<|im_end|>", "<|eot_id|>", "<|im_start|>", "\n\n\n\n\n"]
+                })
+            });
+
+            if (!localResponse.ok) {
+                const error = await localResponse.text();
+                throw new Error(`Local LLM Error: ${error}`);
+            }
+
+            const reader = localResponse.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+                    if (trimmedLine.startsWith('data: ')) {
+                        try {
+                            const chunk = JSON.parse(trimmedLine.slice(6));
+                            const delta = chunk.choices[0].delta;
+
+                            if (delta.reasoning_content) {
+                                if (!isThoughtOpen) {
+                                    res.write('<thought>\n');
+                                    isThoughtOpen = true;
+                                }
+                                res.write(delta.reasoning_content);
+                                reasoningContent += delta.reasoning_content;
+                            }
+
+                            if (delta.content) {
+                                if (isThoughtOpen) {
+                                    res.write('\n</thought>\n');
+                                    isThoughtOpen = false;
+                                }
+                                res.write(delta.content);
+                                messageContent += delta.content;
+                            }
+
+                            if (delta.tool_calls) {
+                                for (const tc of delta.tool_calls) {
+                                    if (tc.index === undefined) continue;
+                                    if (!toolCalls[tc.index]) toolCalls[tc.index] = { id: tc.id, type: "function", function: { name: "", arguments: "" } };
+                                    if (tc.id) toolCalls[tc.index].id = tc.id;
+                                    if (tc.function?.name) toolCalls[tc.index].function.name += tc.function.name;
+                                    if (tc.function?.arguments) toolCalls[tc.index].function.arguments += tc.function.arguments;
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error parsing chunk:', e, trimmedLine);
+                        }
+                    }
+                }
+            }
+
+            if (isThoughtOpen) {
+                res.write('\n</thought>\n');
+                isThoughtOpen = false;
+            }
+
+            const finalMessage = {
+                role: "assistant",
+                content: reasoningContent ? `<thought>\n${reasoningContent}\n</thought>\n${messageContent}` : messageContent,
+            };
+
+            if (toolCalls.length > 0) {
+                finalMessage.tool_calls = toolCalls.filter(tc => tc);
+                res.write(`\n__TOOL_CALLS__:${JSON.stringify(finalMessage.tool_calls)}\n`);
+            }
+
+            currentMessages.push(finalMessage);
+
+            if (finalMessage.tool_calls) {
+                let stopLoop = false;
+                for (const tool_call of finalMessage.tool_calls) {
+                    const tool_name = tool_call.function.name;
+                    const tool_args = JSON.parse(tool_call.function.arguments);
+
+                    if (tool_name === 'execute_command') {
+                        res.write(`\n<tool_approval_request name="${tool_name}" command="${encodeURIComponent(tool_args.command)}" id="${tool_call.id}" />\n`);
+                        stopLoop = true;
+                        continue;
+                    }
+
+                    res.write(`\n<tool_executing name="${tool_name}" />\n`);
+                    try {
+                        const result = await tools[tool_name](tool_args);
+                        if (tool_name === 'write_file' || tool_name === 'delete_file') {
+                            const markerPath = path.join('workspace', tool_args.path).replace(/\\/g, '/');
+                            const info = { path: markerPath, originalContent: result.originalContent, tool: tool_name };
+                            res.write(`\n__FILE_TOUCHED__:${JSON.stringify(info)}\n`);
+                        }
+                        res.write(`\n<tool_done name="${tool_name}" />\n`);
+                        currentMessages.push({
+                            role: "tool",
+                            tool_call_id: tool_call.id,
+                            name: tool_name,
+                            content: JSON.stringify(result)
+                        });
+                    } catch (err) {
+                        res.write(`\n<tool_done name="${tool_name}" error="true" />\n`);
+                        currentMessages.push({
+                            role: "tool",
+                            tool_call_id: tool_call.id,
+                            name: tool_name,
+                            content: JSON.stringify({ error: err.message })
+                        });
+                    }
+                }
+                if (stopLoop) {
+                    running = false;
+                }
+            } else {
+                running = false;
+            }
+        }
+        res.end();
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).write(`Error: ${error.message}`);
+        res.end();
+    }
+});
+wss.on('connection', (ws) => {
+    console.log('Client connected');
+    let shell = null;
+    function startShell() {
+        if (shell && shell.pid) {
+            try { process.kill(-shell.pid, 'SIGKILL'); } catch (e) { }
+        }
+        const isWin = os.platform() === 'win32';
+        let cmd, args, env;
+        if (isWin) {
+            cmd = 'powershell.exe';
+            args = ['-NoLogo'];
+            env = {
+                ...process.env,
+                TERM: 'xterm-256color',
+                COLORTERM: 'truecolor',
+                FORCE_COLOR: '1'
+            };
+        } else {
+            cmd = 'bash';
+            args = [];
+            env = {
+                ...process.env,
+                COLUMNS: '200',
+                LINES: '50',
+                TERM: 'xterm-256color',
+                COLORTERM: 'truecolor',
+                FORCE_COLOR: '1'
+            };
+        }
+        shell = pty.spawn(cmd, args, {
+            name: 'xterm-256color',
+            cols: 80,
+            rows: 30,
+            cwd: WORKSPACE_DIR,
+            env: env,
+        });
+
+        shell.on('data', (data) => {
+            ws.send(data);
+        });
+
+        shell.on('exit', () => {
+            console.log('Shell exited');
+        });
+    }
+    startShell();
+    ws.on('message', (message) => {
+        const msg = message.toString();
+        try {
+            const data = JSON.parse(msg);
+            if (data.type === 'resize') {
+                if (shell) shell.resize(data.cols, data.rows);
+                return;
+            }
+        } catch (e) { }
+
+        if (shell) {
+            shell.write(msg);
+        }
+    });
+    ws.on('close', () => {
+        if (shell) shell.kill();
+        console.log('Client disconnected');
+    });
+});
+function getDirectoryTree(dirPath) {
+    const stats = fs.statSync(dirPath);
+    const node = {
+        name: path.basename(dirPath),
+        path: dirPath.replace(/\\/g, '/'),
+        type: stats.isDirectory() ? 'folder' : 'file',
+    };
+    if (stats.isDirectory()) {
+        const children = fs.readdirSync(dirPath).map(child => {
+            return getDirectoryTree(path.join(dirPath, child));
+        });
+        node.children = children;
+    }
+    return node;
+}
+app.get('/filesystem', (req, res) => {
+    if (!fs.existsSync(WORKSPACE_DIR)) fs.mkdirSync(WORKSPACE_DIR);
+    const tree = getDirectoryTree('workspace');
+    res.json(tree.children || []);
+});
+app.post('/file-content', (req, res) => {
+    const { path: requestedPath } = req.body;
+    if (!requestedPath) return res.status(400).json({ error: "Path is required" });
+    const fullPath = path.resolve(requestedPath);
+    if (!fullPath.startsWith(WORKSPACE_DIR)) return res.status(403).json({ error: "Access denied" });
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: "File not found" });
+    try {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        res.json({ content });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to read file", details: err.message });
+    }
+});
+app.post('/save-file', (req, res) => {
+    const { path: requestedPath, content } = req.body;
+    if (!requestedPath) return res.status(400).json({ error: "Path is required" });
+    if (content === undefined) return res.status(400).json({ error: "Content is required" });
+    const fullPath = path.resolve(requestedPath);
+    if (!fullPath.startsWith(WORKSPACE_DIR)) {
+        return res.status(403).json({ error: "Access denied" });
+    }
+    try {
+        fs.writeFileSync(fullPath, content, 'utf8');
+        res.json({ success: true, message: "File saved successfully" });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to save file", details: err.message });
+    }
+});
+
+app.post('/delete-file', (req, res) => {
+    const { path: requestedPath } = req.body;
+    if (!requestedPath) return res.status(400).json({ error: "Path is required" });
+    const fullPath = path.resolve(requestedPath);
+    if (!fullPath.startsWith(WORKSPACE_DIR)) return res.status(403).json({ error: "Access denied" });
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: "File not found" });
+    try {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+        res.json({ success: true, message: "Deleted successfully" });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to delete", details: err.message });
+    }
+});
+
+app.post('/rename', (req, res) => {
+    const { oldPath: requestedOldPath, newPath: requestedNewPath } = req.body;
+    if (!requestedOldPath || !requestedNewPath) return res.status(400).json({ error: "Old path and new path are required" });
+    
+    const oldPath = path.resolve(requestedOldPath);
+    const newPath = path.resolve(requestedNewPath);
+    
+    if (!oldPath.startsWith(WORKSPACE_DIR) || !newPath.startsWith(WORKSPACE_DIR)) {
+        return res.status(403).json({ error: "Access denied" });
+    }
+    
+    if (!fs.existsSync(oldPath)) return res.status(404).json({ error: "Source not found" });
+    if (fs.existsSync(newPath)) return res.status(400).json({ error: "Destination already exists" });
+    
+    try {
+        fs.renameSync(oldPath, newPath);
+        res.json({ success: true, message: "Renamed successfully" });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to rename", details: err.message });
+    }
+});
+
+app.post('/create-folder', (req, res) => {
+    const { path: requestedPath } = req.body;
+    if (!requestedPath) return res.status(400).json({ error: "Path is required" });
+    const fullPath = path.resolve(requestedPath);
+    if (!fullPath.startsWith(WORKSPACE_DIR)) return res.status(403).json({ error: "Access denied" });
+    if (fs.existsSync(fullPath)) return res.status(400).json({ error: "Folder already exists" });
+    try {
+        fs.mkdirSync(fullPath, { recursive: true });
+        res.json({ success: true, message: "Folder created successfully" });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to create folder", details: err.message });
+    }
+});
+
+server.listen(port, '0.0.0.0', () => {
+    console.log(`Server running on port ${port}`);
+});
