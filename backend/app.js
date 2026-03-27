@@ -245,7 +245,7 @@ app.post('/api/execute-tool', async (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-    const { messages, model = 'Qwen3.5-35B-A3B-UD-Q2_K_XL.gguf', sources = [] } = req.body;
+    const { messages, model = 'Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf', sources = [] } = req.body;
     res.writeHead(200, {
         'Content-Type': 'text/plain; charset=utf-8',
         'Transfer-Encoding': 'chunked',
@@ -254,7 +254,16 @@ app.post('/api/chat', async (req, res) => {
     });
 
     try {
-        let systemPrompt = "You are a 'vibe coding' agent. Your primary role is to help the user with their workspace. You can use tools (like `write_file`) to implement code changes when requested. If the user's request is purely conversational (e.g., 'How are you?'), answer naturally without using tools. NEVER output code blocks (```language ... ```) in your responses; use the `write_file` tool if you need to show or write code. Focus on the 'vibe' of your actions.";
+        let systemPrompt = "You are a 'vibe coding' agent. Your name is KKKM. You must output response professionally since you will be used in big tech companies. Your primary role is to help the user with their workspace. You can use tools (like `write_file`) to implement code changes when requested. If the user's request is purely conversational (e.g., 'How are you?'), answer naturally without using tools. NEVER output code blocks (```language ... ```) in your responses; use the `write_file` tool if you need to show or write code. Focus on the 'vibe' of your actions.";
+        const promptPath = path.join(__dirname, 'prompt.md');
+        if (fs.existsSync(promptPath)) {
+            try {
+                systemPrompt = fs.readFileSync(promptPath, 'utf8');
+            } catch (err) {
+                console.error('Error reading prompt.md:', err);
+            }
+        }
+
         if (sources && sources.length > 0) {
             const sourceText = sources.map(s => `SOURCE: ${s.url}\nTITLE: ${s.title}\nCONTENT: ${s.text}`).join('\n\n---\n\n');
             systemPrompt += `\n\nReference sources provided by the user:\n\n${sourceText}`;
@@ -277,6 +286,7 @@ app.post('/api/chat', async (req, res) => {
                     tools: tool_schemas,
                     tool_choice: 'auto',
                     stream: true,
+                    chat_template_kwargs: { "enable_thinking": true },
                     stop: ["<|endoftext|>", "</s>", "<|im_end|>", "<|eot_id|>", "<|im_start|>", "\n\n\n\n\n"]
                 })
             });
@@ -540,17 +550,17 @@ app.post('/delete-file', (req, res) => {
 app.post('/rename', (req, res) => {
     const { oldPath: requestedOldPath, newPath: requestedNewPath } = req.body;
     if (!requestedOldPath || !requestedNewPath) return res.status(400).json({ error: "Old path and new path are required" });
-    
+
     const oldPath = path.resolve(requestedOldPath);
     const newPath = path.resolve(requestedNewPath);
-    
+
     if (!oldPath.startsWith(WORKSPACE_DIR) || !newPath.startsWith(WORKSPACE_DIR)) {
         return res.status(403).json({ error: "Access denied" });
     }
-    
+
     if (!fs.existsSync(oldPath)) return res.status(404).json({ error: "Source not found" });
     if (fs.existsSync(newPath)) return res.status(400).json({ error: "Destination already exists" });
-    
+
     try {
         fs.renameSync(oldPath, newPath);
         res.json({ success: true, message: "Renamed successfully" });

@@ -61,7 +61,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [input, setInput] = useState("")
     const [isStreaming, setIsStreaming] = useState(false)
-    const [model, setModel] = useState("Qwen3.5-35B-A3B-UD-Q2_K_XL.gguf")
+    const [model, setModel] = useState("Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf")
     const [sources, setSources] = useState<Source[]>([])
     const [newUrl, setNewUrl] = useState("")
     const [isAddingSource, setIsAddingSource] = useState(false)
@@ -322,7 +322,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                         <SelectValue placeholder="Select Model" />
                     </SelectTrigger>
                     <SelectContent>
-                        <SelectItem value="Qwen3.5-35B-A3B-UD-Q2_K_XL.gguf">Qwen3.5 (Local)</SelectItem>
+                        <SelectItem value="Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf">Qwen3.5 (Local)</SelectItem>
                     </SelectContent>
                 </Select>
             </div>

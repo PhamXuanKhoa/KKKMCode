@@ -123,13 +123,13 @@ const ToolExecuting = ({ name }: ToolExecutingProps) => (
 );
 
 const ToolCompleted = ({ name, error }: { name: string; error?: boolean }) => (
-  <div className="flex items-center gap-2 text-muted-foreground italic text-sm my-2 animate-in fade-in duration-300">
+  <div className="flex items-center gap-2 text-muted-foreground text-sm my-2 animate-in fade-in duration-300">
     {error ? (
       <XCircle className="w-4 h-4 text-destructive" />
     ) : (
       <CheckCircle2 className="w-4 h-4 text-emerald-500" />
     )}
-    <span className="font-medium text-foreground/80">
+    <span className="font-black text-foreground/80">
       {`Executed ${name} tool`}
     </span>
   </div>
@@ -167,7 +167,7 @@ const TerminalView = ({ command, output, isDone }: { command: string; output: st
           </div>
         )}
       </div>
-      <div 
+      <div
         ref={scrollRef}
         className="bg-zinc-900 p-4 font-mono text-[12px] leading-relaxed overflow-x-auto whitespace-pre text-zinc-300 min-h-[100px] max-h-[400px] scroll-smooth"
       >
@@ -252,11 +252,30 @@ export const MessageResponse = ({ className, children, onAcceptCode, onApproveTo
 
   // Fix tables that are collapsed into a single line (a common AI formatting issue)
   const fixedContent = children.replace(/\|\s+\|/g, '|\n|');
-  const parts = fixedContent.split(/(<tool_executing name="[^"]+" \/>|<tool_done name="[^"]+"(?:\s+error="true")? \/>|<tool_approval_request name="[^"]+" command="[^"]+" id="[^"]+" \/>)/);
+  const parts = fixedContent.split(/(<tool_executing name="[^"]+" \/>|<tool_done name="[^"]+"(?:\s+error="true")? \/>|<tool_approval_request name="[^"]+" command="[^"]+" id="[^"]+" \/>|<tool_call>[\s\S]*?<\/tool_call>)/);
 
   return (
     <div className={cn("prose prose-sm prose-invert max-w-none leading-relaxed break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}>
       {parts.map((part, index) => {
+        const rawToolCallMatch = part.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
+        if (rawToolCallMatch) {
+          const inner = rawToolCallMatch[1];
+          const funcMatch = inner.match(/<function=([^>]+)>/);
+          const toolName = funcMatch ? funcMatch[1] : "unknown";
+          
+          return (
+            <div key={index} className="flex flex-col gap-2 p-3 my-2 bg-zinc-500/5 text-zinc-500 text-sm font-medium rounded-md border border-zinc-500/10 opacity-70 italic animate-in fade-in duration-300">
+              <div className="flex items-center gap-2">
+                <Terminal size={14} />
+                <span>Unexecuted Tool: {toolName}</span>
+              </div>
+              <div className="text-[11px] font-mono whitespace-pre opacity-80 overflow-x-auto">
+                {inner.trim()}
+              </div>
+            </div>
+          );
+        }
+
         const approvalMatch = part.match(/<tool_approval_request name="([^"]+)" command="([^"]+)" id="([^"]+)" \/>/);
         if (approvalMatch) {
           const toolName = approvalMatch[1];
@@ -273,11 +292,11 @@ export const MessageResponse = ({ className, children, onAcceptCode, onApproveTo
 
           if (toolStatus?.status === 'approved') {
             return (
-              <TerminalView 
-                key={index} 
-                command={command} 
-                output={toolStatus.output} 
-                isDone={true} 
+              <TerminalView
+                key={index}
+                command={command}
+                output={toolStatus.output}
+                isDone={true}
               />
             );
           }

@@ -5,35 +5,57 @@ export interface ParsedResponse {
 }
 
 export function parseAIResponse(text: string): ParsedResponse {
-    const thoughtStartMatch = text.match(/<(thought|think)>/i);
-    const thoughtEndMatch = text.match(/<\/(thought|think)>/i);
+    let thought = "";
+    let content = text;
+    let isThinking = false;
 
-    if (!thoughtStartMatch) {
-        return { content: text.trim(), isThinking: false };
+    // Use a regular expression that handles both <thought> and <think> globally
+    const completedThoughtRegex = /<(thought|think)>([\s\S]*?)<\/\1>/gi;
+
+    // 1. Extract all completed thought blocks
+    content = content.replace(completedThoughtRegex, (_match, _tag, inner) => {
+        // Look for <tool_call> inside the thought
+        const toolCallRegex = /<tool_call>[\s\S]*?<\/tool_call>/gi;
+        let innerText = inner;
+        
+        // Find all tool calls inside the thought
+        const toolCalls = inner.match(toolCallRegex) || [];
+        
+        // If we find tool calls inside the thought, we strip them from the 
+        // reasoning/thought block but append them to the content.
+        innerText = innerText.replace(toolCallRegex, "");
+
+        thought += innerText.trim() + "\n\n";
+        
+        // Append found tool calls back to content (outside the thought)
+        if (toolCalls.length > 0) {
+            content += "\n" + toolCalls.join("\n");
+        }
+        
+        return "";
+    });
+
+
+    // 2. Check for an unclosed thought block at the end (mostly for streaming)
+    const openTagRegex = /<(thought|think)>(?!.*<\/\1>)([\s\S]*)$/i;
+    const openTagMatch = content.match(openTagRegex);
+
+    if (openTagMatch) {
+        isThinking = true;
+        let innerFragment = openTagMatch[2];
+        
+        // Also strip partial tool calls from the trailing thought
+        const partialToolCallRegex = /<tool_call>[\s\S]*$/i;
+        innerFragment = innerFragment.replace(partialToolCallRegex, "");
+        
+        thought += innerFragment.trim();
+        content = content.substring(0, openTagMatch.index).trim();
     }
 
-    const startTag = thoughtStartMatch[0];
-    const startIndex = thoughtStartMatch.index!;
-    const afterStart = text.substring(startIndex + startTag.length);
-
-    if (thoughtEndMatch) {
-        const endTag = thoughtEndMatch[0];
-        const endIndex = text.indexOf(endTag);
-        const thoughtPart = text.substring(startIndex + startTag.length, endIndex);
-        const beforePart = text.substring(0, startIndex);
-        const afterPart = text.substring(endIndex + endTag.length);
-
-        return {
-            thought: thoughtPart.trim(),
-            content: (beforePart + afterPart).trim(),
-            isThinking: false
-        };
-    } else {
-        const beforePart = text.substring(0, startIndex);
-        return {
-            thought: afterStart.trim(),
-            content: beforePart.trim(),
-            isThinking: true
-        };
-    }
+    return {
+        thought: thought.trim() || undefined,
+        content: content.trim(),
+        isThinking
+    };
 }
+
