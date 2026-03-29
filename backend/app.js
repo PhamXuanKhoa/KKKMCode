@@ -408,6 +408,8 @@ app.post('/api/chat', async (req, res) => {
                     }
 
                     res.write(`\n<tool_executing name="${tool_name}" />\n`);
+                    // Small delay to ensure the UI has time to show the "Executing" state
+                    await new Promise(resolve => setTimeout(resolve, 500));
                     try {
                         const result = await tools[tool_name](tool_args);
                         if (tool_name === 'write_file' || tool_name === 'delete_file') {

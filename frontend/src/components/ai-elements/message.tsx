@@ -82,7 +82,7 @@ interface ToolApprovalProps {
   onReject: (id: string) => void;
 }
 
-const ToolApproval = ({ name, command, id, onApprove, onReject }: ToolApprovalProps) => (
+const ToolApproval = ({ command, id, onApprove, onReject }: ToolApprovalProps) => (
   <div className="flex flex-col gap-4 p-4 my-4 border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 rounded-md w-full">
     {/* Header: Normal text, no eyebrow labels, no decorative orange glow */}
     <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 font-semibold text-sm">
@@ -252,11 +252,29 @@ export const MessageResponse = ({ className, children, onAcceptCode, onApproveTo
 
   // Fix tables that are collapsed into a single line (a common AI formatting issue)
   const fixedContent = children.replace(/\|\s+\|/g, '|\n|');
-  const parts = fixedContent.split(/(<tool_executing name="[^"]+" \/>|<tool_done name="[^"]+"(?:\s+error="true")? \/>|<tool_approval_request name="[^"]+" command="[^"]+" id="[^"]+" \/>|<tool_call>[\s\S]*?<\/tool_call>)/);
+  const parts = fixedContent.split(/(<tool_executing[^>]*\/?>|<tool_done[^>]*\/?>|<tool_approval_request[^>]*\/?>|<tool_call>[\s\S]*?<\/tool_call>|(?=<tool_executing)|(?=<tool_done)|(?=<tool_approval_request))/);
 
   return (
     <div className={cn("prose prose-sm prose-invert max-w-none leading-relaxed break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}>
       {parts.map((part, index) => {
+        // Handle partial tags during streaming to ensure visibility
+        if (part.startsWith('<tool_executing') && !part.includes('/>')) {
+          const nameMatch = part.match(/name="([^"]*)"/);
+          const toolName = nameMatch ? nameMatch[1] : "...";
+          return <ToolExecuting key={index} name={toolName} />;
+        }
+        if (part.startsWith('<tool_done') && !part.includes('/>')) {
+          return null; // Transitioning
+        }
+        if (part.startsWith('<tool_approval_request') && !part.includes('/>')) {
+          return (
+            <div key={index} className="flex items-center gap-2 text-muted-foreground italic text-sm my-2 animate-pulse">
+              <Loader size={14} className="text-primary" />
+              <span>Preparing tool approval...</span>
+            </div>
+          );
+        }
+
         const rawToolCallMatch = part.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
         if (rawToolCallMatch) {
           const inner = rawToolCallMatch[1];
@@ -276,7 +294,7 @@ export const MessageResponse = ({ className, children, onAcceptCode, onApproveTo
           );
         }
 
-        const approvalMatch = part.match(/<tool_approval_request name="([^"]+)" command="([^"]+)" id="([^"]+)" \/>/);
+        const approvalMatch = part.match(/<tool_approval_request name="([^"]+)" command="([^"]+)" id="([^"]+)" ?\/>/);
         if (approvalMatch) {
           const toolName = approvalMatch[1];
           const command = decodeURIComponent(approvalMatch[2]);
@@ -322,16 +340,15 @@ export const MessageResponse = ({ className, children, onAcceptCode, onApproveTo
           );
         }
 
-        const execMatch = part.match(/<tool_executing name="([^"]+)" \/>/);
+        const execMatch = part.match(/<tool_executing name="([^"]+)" ?\/>/);
         if (execMatch) {
           const toolName = execMatch[1];
-          // Check if there's a corresponding tool_done later in the string
           const isDone = parts.slice(index + 1).some(p => p.includes(`<tool_done name="${toolName}"`));
-          if (isDone) return null; // Hide the "executing" part if it's done
+          if (isDone) return null;
           return <ToolExecuting key={index} name={toolName} />;
         }
 
-        const doneMatch = part.match(/<tool_done name="([^"]+)"(?:\s+error="([^"]+)")? \/>/);
+        const doneMatch = part.match(/<tool_done name="([^"]+)"(?:\s+error="([^"]+)")? ?\/>/);
         if (doneMatch) {
           const toolName = doneMatch[1];
           const hasError = doneMatch[2] === "true";
