@@ -21,90 +21,118 @@ if (!fs.existsSync(WORKSPACE_DIR)) fs.mkdirSync(WORKSPACE_DIR);
 
 const tool_schemas = [
     {
-        type: "function",
-        function: {
-            name: "list_files",
-            description: "List files and directories in a given path relative to the workspace.",
-            parameters: {
-                type: "object",
-                properties: {
-                    path: { type: "string", description: "The relative path to list." }
-                }
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "List files and directories in a given relative workspace path. Path must stay within the workspace and must not be absolute or contain '..'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path within the workspace (e.g., '.', 'src/', 'data')."
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
             }
         }
     },
     {
-        type: "function",
-        function: {
-            name: "read_file",
-            description: "Read the content of a file.",
-            parameters: {
-                type: "object",
-                properties: {
-                    path: { type: "string", description: "The relative path of the file to read." }
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read the contents of a text file from the workspace. Binary files may not be supported.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative file path (e.g., 'src/index.js'). Must not be absolute or contain '..'."
+                    }
                 },
-                required: ["path"]
+                "required": ["path"],
+                "additionalProperties": false
             }
         }
     },
     {
-        type: "function",
-        function: {
-            name: "write_file",
-            description: "Write content to a file.",
-            parameters: {
-                type: "object",
-                properties: {
-                    path: { type: "string", description: "The relative path of the file to write." },
-                    content: { type: "string", description: "The content to write to the file." }
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file in the workspace. Overwrites the file if it already exists.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative file path. Must not be absolute or contain '..'."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full text content to write into the file."
+                    }
                 },
-                required: ["path", "content"]
+                "required": ["path", "content"],
+                "additionalProperties": false
             }
         }
     },
     {
-        type: "function",
-        function: {
-            name: "delete_file",
-            description: "Delete a file.",
-            parameters: {
-                type: "object",
-                properties: {
-                    path: { type: "string", description: "The relative path of the file to delete." }
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "Delete a file from the workspace. This operation is irreversible.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative file path. Must not be absolute or contain '..'."
+                    }
                 },
-                required: ["path"]
+                "required": ["path"],
+                "additionalProperties": false
             }
         }
     },
     {
-        type: "function",
-        function: {
-            name: "execute_command",
-            description: "Execute a terminal command in the workspace.",
-            parameters: {
-                type: "object",
-                properties: {
-                    command: { type: "string", description: "The command to execute." }
+        "type": "function",
+        "function": {
+            "name": "execute_command",
+            "description": "Execute a shell command in a sandboxed environment. Commands must be validated against an allowlist before execution.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to execute. Should be restricted to safe, predefined commands."
+                    }
                 },
-                required: ["command"]
+                "required": ["command"],
+                "additionalProperties": false
             }
         }
     },
     {
-        type: "function",
-        function: {
-            name: "fetch_url",
-            description: "Fetch the HTML content of a URL and parse it to text.",
-            parameters: {
-                type: "object",
-                properties: {
-                    url: { type: "string", description: "The URL to fetch." }
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": "Fetch and return the textual content of a URL. Only HTTP and HTTPS protocols are allowed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Valid HTTP or HTTPS URL."
+                    }
                 },
-                required: ["url"]
+                "required": ["url"],
+                "additionalProperties": false
             }
         }
     }
-];
+]
 
 const tools = {
     list_files: async ({ path: relPath = '.' }) => {
