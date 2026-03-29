@@ -52,9 +52,12 @@ export function parseAIResponse(text: string): ParsedResponse {
         content = content.substring(0, openTagMatch.index).trim();
     }
 
+    // Final cleanup: remove any orphaned or redundant thought/think tags from display content
+    content = content.replace(/<\/?(thought|think)>/gi, '').trim();
+
     return {
         thought: thought.trim() || undefined,
-        content: content.trim(),
+        content,
         isThinking
     };
 }
