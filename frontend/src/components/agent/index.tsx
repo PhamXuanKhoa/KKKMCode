@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Textarea } from "@/components/ui/textarea"
-import { Send, Link as LinkIcon, X, Globe, Plus, Loader2 } from "lucide-react"
+import { Send, Link as LinkIcon, X, Globe, Plus, Loader2, Trash2 } from "lucide-react"
 import { parseAIResponse } from "@/lib/ai-parser"
 
 import {
@@ -19,6 +19,12 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from "@/components/ui/tooltip"
 import {
     Conversation,
     ConversationContent
@@ -319,6 +325,11 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
         await callChat(updatedMessages);
     };
 
+    const handleClearChat = () => {
+        setMessages([]);
+        setSources([]);
+    };
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -330,14 +341,34 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
         <div className="flex flex-col h-full bg-card text-foreground rounded-lg overflow-hidden border">
             <div className="p-2 border-b bg-muted/30 flex justify-between items-center px-4">
                 <span className="text-sm font-medium text-muted-foreground">Model</span>
-                <Select value={model} onValueChange={setModel}>
-                    <SelectTrigger className="w-[180px] h-8 text-xs">
-                        <SelectValue placeholder="Select Model" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf">Qwen3.5 (Local)</SelectItem>
-                    </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2">
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="cursor-pointer h-8 w-8 text-muted-foreground hover:text-destructive transition-colors"
+                                    onClick={handleClearChat}
+                                    disabled={isStreaming}
+                                >
+                                    <Trash2 size={16} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" align="center">
+                                <p>Clear Chat (Forget Context)</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                    <Select value={model} onValueChange={setModel}>
+                        <SelectTrigger className="w-[180px] h-8 text-xs">
+                            <SelectValue placeholder="Select Model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf">Qwen3.5 (Local)</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
             </div>
             <Conversation className="flex-1 overflow-y-auto">
                 <ConversationContent className="p-4 space-y-4">
@@ -353,8 +384,8 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
                                             <Loader size={14} className="text-primary" />
                                             <Shimmer duration={1.5}>
-                                                {currentStreamingTool 
-                                                    ? `${currentStreamingTool.name === 'write_file' ? 'Editing' : 'Deleting'} ${currentStreamingTool.path}...` 
+                                                {currentStreamingTool
+                                                    ? `${currentStreamingTool.name === 'write_file' ? 'Editing' : 'Deleting'} ${currentStreamingTool.path}...`
                                                     : "Processing your prompt..."}
                                             </Shimmer>
                                         </div>
