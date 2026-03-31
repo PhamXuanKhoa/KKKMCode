@@ -315,6 +315,7 @@ app.post('/api/chat', async (req, res) => {
                     tools: tool_schemas,
                     tool_choice: 'auto',
                     stream: true,
+                    stream_options: { include_usage: true },
                     chat_template_kwargs: { "enable_thinking": true },
                     stop: ["<|endoftext|>", "</s>", "<|im_end|>", "<|eot_id|>", "<|im_start|>", "\n\n\n\n\n"]
                 })
@@ -343,9 +344,9 @@ app.post('/api/chat', async (req, res) => {
                     if (trimmedLine.startsWith('data: ')) {
                         try {
                             const chunk = JSON.parse(trimmedLine.slice(6));
-                            const delta = chunk.choices[0].delta;
+                            const delta = (chunk.choices && chunk.choices.length > 0) ? chunk.choices[0].delta : null;
 
-                            if (delta.reasoning_content) {
+                            if (delta && delta.reasoning_content) {
                                 if (!isThoughtOpen) {
                                     res.write('<thought>\n');
                                     isThoughtOpen = true;
@@ -354,7 +355,7 @@ app.post('/api/chat', async (req, res) => {
                                 reasoningContent += delta.reasoning_content;
                             }
 
-                            if (delta.content) {
+                            if (delta && delta.content) {
                                 if (isThoughtOpen) {
                                     res.write('\n</thought>\n');
                                     isThoughtOpen = false;
@@ -374,7 +375,14 @@ app.post('/api/chat', async (req, res) => {
                                 }
                             }
 
-                            if (delta.tool_calls) {
+                            if (chunk.timings && chunk.timings.predicted_per_second) {
+                                res.write(`\n__SPEED__:${JSON.stringify({ tps: chunk.timings.predicted_per_second })}\n`);
+                            } else if (chunk.usage && chunk.usage.completion_tokens && chunk.usage.completion_milliseconds) {
+                                const tps = (chunk.usage.completion_tokens / (chunk.usage.completion_milliseconds / 1000)).toFixed(2);
+                                res.write(`\n__SPEED__:${JSON.stringify({ tps: parseFloat(tps) })}\n`);
+                            }
+
+                            if (delta && delta.tool_calls) {
                                 for (const tc of delta.tool_calls) {
                                     if (tc.index === undefined) continue;
                                     if (!toolCalls[tc.index]) toolCalls[tc.index] = { id: tc.id, type: "function", function: { name: "", arguments: "" } };
@@ -397,6 +405,13 @@ app.post('/api/chat', async (req, res) => {
                                         }
                                     }
                                 }
+                            }
+
+                            if (chunk.timings && chunk.timings.predicted_per_second) {
+                                res.write(`\n__SPEED__:${JSON.stringify({ tps: chunk.timings.predicted_per_second })}\n`);
+                            } else if (chunk.usage && chunk.usage.completion_tokens && chunk.usage.completion_milliseconds) {
+                                const tps = (chunk.usage.completion_tokens / (chunk.usage.completion_milliseconds / 1000)).toFixed(2);
+                                res.write(`\n__SPEED__:${JSON.stringify({ tps: parseFloat(tps) })}\n`);
                             }
                         } catch (e) {
                             console.error('Error parsing chunk:', e, trimmedLine);

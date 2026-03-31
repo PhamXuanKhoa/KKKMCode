@@ -147,6 +147,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                 const fileTouchedRegex = /__FILE_TOUCHED__:(.+)\n/g;
                 const toolCallsRegex = /__TOOL_CALLS__:(.+)\n/g;
                 const toolStreamingRegex = /__TOOL_STREAMING__:(.+)\n/g;
+                const speedRegex = /__SPEED__:(.+)\n/g;
 
                 // Extract file touched
                 let match;
@@ -161,7 +162,8 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                 const displayContent = accumulatedResponse
                     .replace(/__FILE_TOUCHED__:.*\n/g, '')
                     .replace(/__TOOL_CALLS__:.*\n/g, '')
-                    .replace(/__TOOL_STREAMING__:.*\n/g, '');
+                    .replace(/__TOOL_STREAMING__:.*\n/g, '')
+                    .replace(/__SPEED__:.*\n/g, '');
 
                 // Extract tool calls
                 let tcMatch;
@@ -181,9 +183,20 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                         setCurrentStreamingTool(toolInfo);
                     } catch (e) { }
                 }
+                
+                // Extract speed
+                let sMatch;
+                while ((sMatch = speedRegex.exec(accumulatedResponse)) !== null) {
+                    try {
+                        const info = JSON.parse(sMatch[1]);
+                        currentAssistantMsg.speed = info.tps;
+                    } catch (e) { }
+                    lastProcessedIndex = Math.max(lastProcessedIndex, speedRegex.lastIndex);
+                }
 
                 const elapsedSeconds = (Date.now() - startTime) / 1000;
-                const tokensPerSec = elapsedSeconds > 0 ? (displayContent.length / 4) / elapsedSeconds : 0;
+                const estimatedTps = elapsedSeconds > 0 ? (displayContent.length / 4) / elapsedSeconds : 0;
+                const tokensPerSec = currentAssistantMsg.speed || estimatedTps;
 
                 setMessages(prev => {
                     const newMsgs = [...prev];
@@ -361,11 +374,11 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                         </Tooltip>
                     </TooltipProvider>
                     <Select value={model} onValueChange={setModel}>
-                        <SelectTrigger className="w-[180px] h-8 text-xs">
+                        <SelectTrigger className="w-[180px] h-8 text-xs cursor-pointer">
                             <SelectValue placeholder="Select Model" />
                         </SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf">Qwen3.5 (Local)</SelectItem>
+                            <SelectItem value="Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf">Qwen3.5-35B-A3B-Q4</SelectItem>
                         </SelectContent>
                     </Select>
                 </div>
