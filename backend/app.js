@@ -304,6 +304,7 @@ app.post('/api/chat', async (req, res) => {
             let reasoningContent = '';
             let toolCalls = [];
             let isThoughtOpen = false;
+            const sentToolStreamingMarkers = new Set();
 
             const localResponse = await fetch('http://localhost:8080/v1/chat/completions', {
                 method: 'POST',
@@ -360,6 +361,17 @@ app.post('/api/chat', async (req, res) => {
                                 }
                                 res.write(delta.content);
                                 messageContent += delta.content;
+
+                                // XML-style status marker
+                                const pathMatch = messageContent.match(/<parameter=(?:path|TargetFile)>\s*([^<\n]+)/);
+                                if (pathMatch) {
+                                    const fileName = pathMatch[1].trim().split(/[/\\]/).pop();
+                                    const marker = `__TOOL_STREAMING__:${JSON.stringify({ name: 'write_file', path: fileName })}\n`;
+                                    if (!sentToolStreamingMarkers.has(marker)) {
+                                        res.write(`\n${marker}`);
+                                        sentToolStreamingMarkers.add(marker);
+                                    }
+                                }
                             }
 
                             if (delta.tool_calls) {
@@ -369,6 +381,21 @@ app.post('/api/chat', async (req, res) => {
                                     if (tc.id) toolCalls[tc.index].id = tc.id;
                                     if (tc.function?.name) toolCalls[tc.index].function.name += tc.function.name;
                                     if (tc.function?.arguments) toolCalls[tc.index].function.arguments += tc.function.arguments;
+
+                                    const currentTool = toolCalls[tc.index];
+                                    if (currentTool.function?.name === 'write_file' || currentTool.function?.name === 'delete_file') {
+                                        const args = currentTool.function.arguments;
+                                        const pathMatch = args.match(/"path"\s*:\s*"([^"]*)"/);
+                                        if (pathMatch) {
+                                            const filePath = pathMatch[1];
+                                            const fileName = filePath.split(/[/\\]/).pop();
+                                            const marker = `__TOOL_STREAMING__:${JSON.stringify({ name: currentTool.function.name, path: fileName })}\n`;
+                                            if (!sentToolStreamingMarkers.has(marker)) {
+                                                res.write(`\n${marker}`);
+                                                sentToolStreamingMarkers.add(marker);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         } catch (e) {
@@ -388,9 +415,47 @@ app.post('/api/chat', async (req, res) => {
                 content: reasoningContent ? `<thought>\n${reasoningContent}\n</thought>\n${messageContent}` : messageContent,
             };
 
+            // Parse XML tool calls from content
+            const xmlToolCallRegex = /<tool_call>[\s\S]*?<function=([^>]+)>([\s\S]*?)<\/tool_call>/gi;
+            const paramRegex = /<parameter=([^>]+)>([\s\S]*?)<\/parameter>/gi;
+            let match;
+            while ((match = xmlToolCallRegex.exec(messageContent)) !== null) {
+                const functionName = match[1].trim();
+                const parametersRaw = match[2];
+                const args = {};
+                let pMatch;
+                while ((pMatch = paramRegex.exec(parametersRaw)) !== null) {
+                    args[pMatch[1].trim()] = pMatch[2].trim();
+                }
+                
+                if (!finalMessage.tool_calls) finalMessage.tool_calls = [];
+                // Only add if not already present (avoid duplicates if model uses both styles)
+                if (!finalMessage.tool_calls.some(tc => {
+                    if (tc.function.name !== functionName) return false;
+                    try {
+                        const tcArgs = typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments;
+                        return JSON.stringify(tcArgs) === JSON.stringify(args);
+                    } catch (e) {
+                        return tc.function.arguments === JSON.stringify(args);
+                    }
+                })) {
+                    finalMessage.tool_calls.push({
+                        id: `xml_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                        type: 'function',
+                        function: {
+                            name: functionName,
+                            arguments: JSON.stringify(args)
+                        }
+                    });
+                }
+            }
+
             if (toolCalls.length > 0) {
-                finalMessage.tool_calls = toolCalls.filter(tc => tc);
+                const existingCalls = finalMessage.tool_calls || [];
+                finalMessage.tool_calls = [...existingCalls, ...toolCalls.filter(tc => tc)];
                 res.write(`\n__TOOL_CALLS__:${JSON.stringify(finalMessage.tool_calls)}\n`);
+            } else if (finalMessage.tool_calls) {
+                 res.write(`\n__TOOL_CALLS__:${JSON.stringify(finalMessage.tool_calls)}\n`);
             }
 
             currentMessages.push(finalMessage);

@@ -66,6 +66,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
     const [newUrl, setNewUrl] = useState("")
     const [isAddingSource, setIsAddingSource] = useState(false)
     const [executingToolOutput, setExecutingToolOutput] = useState<Record<string, string>>({})
+    const [currentStreamingTool, setCurrentStreamingTool] = useState<{ name: string, path: string } | null>(null)
     const isPendingToolApproval = messages.some(msg => {
         if (msg.role !== 'assistant') return false;
         const matches = [...msg.content.matchAll(/<tool_approval_request [^>]*id="([^"]+)"/g)];
@@ -102,6 +103,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
 
     const callChat = async (history: ChatMessage[]) => {
         setIsStreaming(true);
+        setCurrentStreamingTool(null);
         try {
             const response = await fetch('http://localhost:3000/api/chat', {
                 method: 'POST',
@@ -138,6 +140,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                 // Parse indicators
                 const fileTouchedRegex = /__FILE_TOUCHED__:(.+)\n/g;
                 const toolCallsRegex = /__TOOL_CALLS__:(.+)\n/g;
+                const toolStreamingRegex = /__TOOL_STREAMING__:(.+)\n/g;
 
                 // Extract file touched
                 let match;
@@ -149,6 +152,11 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                     lastProcessedIndex = Math.max(lastProcessedIndex, fileTouchedRegex.lastIndex);
                 }
 
+                const displayContent = accumulatedResponse
+                    .replace(/__FILE_TOUCHED__:.*\n/g, '')
+                    .replace(/__TOOL_CALLS__:.*\n/g, '')
+                    .replace(/__TOOL_STREAMING__:.*\n/g, '');
+
                 // Extract tool calls
                 let tcMatch;
                 while ((tcMatch = toolCallsRegex.exec(accumulatedResponse)) !== null) {
@@ -159,10 +167,14 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                     lastProcessedIndex = Math.max(lastProcessedIndex, toolCallsRegex.lastIndex);
                 }
 
-                // Strip markers for display
-                const displayContent = accumulatedResponse
-                    .replace(/__FILE_TOUCHED__:.*\n/g, '')
-                    .replace(/__TOOL_CALLS__:.*\n/g, '');
+                // Extract tool streaming
+                let tsMatch;
+                while ((tsMatch = toolStreamingRegex.exec(accumulatedResponse)) !== null) {
+                    try {
+                        const toolInfo = JSON.parse(tsMatch[1]);
+                        setCurrentStreamingTool(toolInfo);
+                    } catch (e) { }
+                }
 
                 const elapsedSeconds = (Date.now() - startTime) / 1000;
                 const tokensPerSec = elapsedSeconds > 0 ? (displayContent.length / 4) / elapsedSeconds : 0;
@@ -195,6 +207,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
             ]);
         } finally {
             setIsStreaming(false);
+            setCurrentStreamingTool(null);
         }
     };
 
@@ -339,7 +352,11 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                                     {msg.role === 'assistant' && msg.content === '' && isStreaming ? (
                                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
                                             <Loader size={14} className="text-primary" />
-                                            <Shimmer duration={1.5}>Processing your prompt...</Shimmer>
+                                            <Shimmer duration={1.5}>
+                                                {currentStreamingTool 
+                                                    ? `${currentStreamingTool.name === 'write_file' ? 'Editing' : 'Deleting'} ${currentStreamingTool.path}...` 
+                                                    : "Processing your prompt..."}
+                                            </Shimmer>
                                         </div>
                                     ) : (
                                         <>
@@ -370,6 +387,14 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                                                     >
                                                         {content}
                                                     </MessageResponse>
+                                                    {isStreaming && currentStreamingTool && (
+                                                        <div className="flex items-center gap-2 text-muted-foreground text-sm mt-1 px-4 py-2 bg-muted/30 rounded-lg border border-border/50 animate-in fade-in slide-in-from-top-2 duration-300">
+                                                            <Loader size={14} className="text-primary" />
+                                                            <Shimmer duration={1.5}>
+                                                                {`${currentStreamingTool.name === 'write_file' ? 'Editing' : 'Deleting'} ${currentStreamingTool.path}...`}
+                                                            </Shimmer>
+                                                        </div>
+                                                    )}
                                                     {msg.speed !== undefined && (msg.speed > 0 || !isStreaming) && (
                                                         <div className="text-[10px] text-muted-foreground self-end px-2 py-0.5 bg-muted/50 rounded-full border border-border/50 font-mono animate-in fade-in duration-300">
                                                             {msg.speed.toFixed(1)} tokens/s
