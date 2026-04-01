@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { getLanguageFromPath, normalizePath } from '@/lib/utils'
+import { MarkdownPreview } from './markdown-preview'
 import {
     ResizableHandle,
     ResizablePanel,
@@ -28,6 +29,7 @@ interface OpenFile {
     content: string
     language: string
     isDirty?: boolean
+    isVirtual?: boolean
 }
 
 export function ResizableDemo() {
@@ -160,6 +162,34 @@ export function ResizableDemo() {
                 ))
             }
         }
+    }
+    
+    const handleOpenTemporaryFile = (content: string, fileName: string) => {
+        const virtualPath = `virtual://${fileName}`
+        console.log('Opening virtual file:', virtualPath);
+
+        setOpenFiles(prev => {
+            const exists = prev.find(f => f.path === virtualPath)
+            if (exists) {
+                return prev.map(f =>
+                    f.path === virtualPath ? { ...f, content: content } : f
+                )
+            }
+
+            return [...prev, {
+                path: virtualPath,
+                name: fileName,
+                content: content,
+                language: 'markdown',
+                isDirty: false,
+                isVirtual: true
+            }]
+        })
+
+        setActiveFilePath(virtualPath)
+        setEditorContent(content)
+        setEditorLanguage('markdown')
+        currentFilePathRef.current = virtualPath
     }
 
     const handleFileTouched = (filePath: string, originalContent?: string | null) => {
@@ -322,30 +352,36 @@ export function ResizableDemo() {
                                                     }}
                                                 />
                                             ) : (
-                                                <Editor
-                                                    height="100%"
-                                                    language={editorLanguage}
-                                                    theme="vs-dark"
-                                                    value={editorContent}
-                                                    onChange={(value) => {
-                                                        const newContent = value || ''
-                                                        setEditorContent(newContent)
-                                                        if (activeFilePath) {
-                                                            setOpenFiles(prev => prev.map(f =>
-                                                                f.path === activeFilePath ? { ...f, isDirty: true } : f
-                                                            ))
-                                                        }
-                                                    }}
-                                                    onMount={(editor) => {
-                                                        editorRef.current = editor
-                                                        editor.addCommand(
-                                                            monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
-                                                            () => {
-                                                                handleSaveFile()
-                                                            }
-                                                        )
-                                                    }}
-                                                />
+                                                <>
+                                                    {activeFilePath && activeFilePath.startsWith('virtual://') && activeFilePath.endsWith('.md') ? (
+                                                        <MarkdownPreview content={editorContent} />
+                                                    ) : (
+                                                        <Editor
+                                                            height="100%"
+                                                            language={editorLanguage}
+                                                            theme="vs-dark"
+                                                            value={editorContent}
+                                                            onChange={(value) => {
+                                                                const newContent = value || ''
+                                                                setEditorContent(newContent)
+                                                                if (activeFilePath) {
+                                                                    setOpenFiles(prev => prev.map(f =>
+                                                                        f.path === activeFilePath ? { ...f, isDirty: true } : f
+                                                                    ))
+                                                                }
+                                                            }}
+                                                            onMount={(editor) => {
+                                                                editorRef.current = editor
+                                                                editor.addCommand(
+                                                                    monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+                                                                    () => {
+                                                                        handleSaveFile()
+                                                                    }
+                                                                )
+                                                            }}
+                                                        />
+                                                    )}
+                                                </>
                                             )}
                                             {Object.keys(pendingFiles).length > 0 && (
                                                 <div className="absolute bottom-4 right-8 z-50">
@@ -382,7 +418,7 @@ export function ResizableDemo() {
 
                 <ResizablePanel defaultSize={25} minSize={10}>
                     <div className="h-full bg-card">
-                        <Agent onAcceptCode={handleAcceptCode} onFileTouched={handleFileTouched} />
+                        <Agent onAcceptCode={handleAcceptCode} onFileTouched={handleFileTouched} onOpenTemporaryFile={handleOpenTemporaryFile} />
                     </div>
                 </ResizablePanel>
             </ResizablePanelGroup>

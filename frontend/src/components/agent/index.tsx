@@ -62,9 +62,10 @@ type Source = {
 interface AgentProps {
     onAcceptCode?: (code: string) => void;
     onFileTouched?: (path: string, originalContent?: string | null) => void;
+    onOpenTemporaryFile?: (content: string, filename: string) => void;
 }
 
-export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
+export function Agent({ onAcceptCode, onFileTouched, onOpenTemporaryFile }: AgentProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [input, setInput] = useState("")
     const [isStreaming, setIsStreaming] = useState(false)
@@ -215,12 +216,12 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
 
             while (true) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (value) {
+                    const chunk = decoder.decode(value, { stream: true });
+                    accumulatedResponse += chunk;
+                }
 
-                const chunk = decoder.decode(value, { stream: true });
-                accumulatedResponse += chunk;
-
-                // Parse indicators
+                // Parse indicators (do this before break to handle last chunk)
                 const fileTouchedRegex = /__FILE_TOUCHED__:(.+)\n/g;
                 const toolCallsRegex = /__TOOL_CALLS__:(.+)\n/g;
                 const toolStreamingRegex = /__TOOL_STREAMING__:(.+)\n/g;
@@ -294,6 +295,20 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                     }
                     return newMsgs;
                 });
+
+                if (done) break;
+            }
+
+            // Handle virtual file opening after streaming is done
+            if (currentAssistantMsg.tool_calls) {
+                for (const tc of currentAssistantMsg.tool_calls) {
+                    if (tc.function.name === 'open_temporary_file') {
+                        try {
+                            const args = JSON.parse(tc.function.arguments);
+                            if (onOpenTemporaryFile) onOpenTemporaryFile(args.content, args.filename);
+                        } catch (e) { }
+                    }
+                }
             }
         } catch (error) {
             console.error("Error:", error);

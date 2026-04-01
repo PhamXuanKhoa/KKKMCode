@@ -168,6 +168,28 @@ const tool_schemas = [
                 "additionalProperties": false
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_temporary_file",
+            "description": "Open a temporary markdown file in a new editor tab for the user to see a walkthrough or summary. This file is NOT saved to the workspace and only exists in the UI.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "The name of the temporary file (e.g., 'walkthrough.md')."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The markdown content to display in the temporary file."
+                    }
+                },
+                "required": ["filename", "content"],
+                "additionalProperties": false
+            }
+        }
     }
 ]
 
@@ -248,6 +270,9 @@ const tools = {
         } catch (err) {
             throw new Error(`Failed to fetch URL: ${err.message}`);
         }
+    },
+    open_temporary_file: async ({ filename, content }) => {
+        return { message: `Temporary file '${filename}' opened in editor.` };
     }
 };
 
