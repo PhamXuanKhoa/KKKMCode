@@ -276,6 +276,53 @@ const tools = {
     }
 };
 
+function detectUnexecutedToolCalls(messageContent, toolCalls, reasoningContent = '') {
+    const issues = [];
+
+    // 0. Check if tool call intent is trapped in reasoning
+    if (reasoningContent.includes('<tool_call>') || reasoningContent.includes('<function=')) {
+        issues.push("Tool call found inside reasoning content. Tool calls MUST be placed after the reasoning block is closed (outside of `<thought>` tags).");
+    }
+
+    // 1. Check for unclosed XML tags
+    if (messageContent.includes('<tool_call>') && !messageContent.includes('</tool_call>')) {
+        issues.push("Missing closing </tool_call> tag.");
+    }
+    
+    const paramStarts = (messageContent.match(/<parameter=/g) || []).length;
+    const paramEnds = (messageContent.match(/<\/parameter>/g) || []).length;
+    if (paramStarts > paramEnds) {
+        issues.push(`Missing ${paramStarts - paramEnds} closing </parameter> tag(s).`);
+    }
+
+    // 2. Check for missing tool calls if intent is detected (heuristic)
+    const xmlIntent = messageContent.includes('<tool_call>') || messageContent.includes('<function=');
+    const hasToolCalls = toolCalls && toolCalls.length > 0;
+    
+    if (xmlIntent && !hasToolCalls) {
+        issues.push("Found XML tool tags but no valid tool call was parsed. Ensure you use the exact format: <tool_call><function=name><parameter=name>value</parameter></function></tool_call>");
+    }
+
+    // 3. Check for valid JSON in standard tool calls
+    if (toolCalls) {
+        for (const tc of toolCalls) {
+            if (tc.function && tc.function.arguments) {
+                try {
+                    if (typeof tc.function.arguments === 'string') {
+                        JSON.parse(tc.function.arguments);
+                    }
+                } catch (e) {
+                    issues.push(`Invalid JSON arguments in tool call '${tc.function.name}': ${e.message}. Ensure arguments are a single valid JSON object.`);
+                }
+            } else if (!tc.function || !tc.function.name) {
+                issues.push("Empty or partial tool call detected.");
+            }
+        }
+    }
+
+    return issues;
+}
+
 // --- History API ---
 
 app.get('/api/chats', async (req, res) => {
@@ -431,6 +478,9 @@ app.post('/api/chat', async (req, res) => {
         let currentMessages = [{ role: "system", content: systemPrompt }, ...messages];
         let running = true;
 
+        let turnRetryCount = 0;
+        const MAX_TURN_RETRIES = 3;
+
         while (running) {
             let messageContent = '';
             let reasoningContent = '';
@@ -478,14 +528,16 @@ app.post('/api/chat', async (req, res) => {
                             const chunk = JSON.parse(trimmedLine.slice(6));
                             const delta = (chunk.choices && chunk.choices.length > 0) ? chunk.choices[0].delta : null;
 
-                            if (delta && delta.reasoning_content) {
-                                if (!isThoughtOpen) {
-                                    res.write('<thought>\n');
-                                    isThoughtOpen = true;
-                                }
-                                res.write(delta.reasoning_content);
-                                reasoningContent += delta.reasoning_content;
-                            }
+                             if (delta && delta.reasoning_content) {
+                                 if (!isThoughtOpen) {
+                                     res.write('<thought>\n');
+                                     isThoughtOpen = true;
+                                 }
+                                 // Sanitize literal thought tags from the model to avoid nesting
+                                 const sanitizedReasoning = delta.reasoning_content.replace(/<\/?thought[^>]*>/gi, '');
+                                 res.write(sanitizedReasoning);
+                                 reasoningContent += sanitizedReasoning;
+                             }
 
                             if (delta && delta.content) {
                                 if (isThoughtOpen) {
@@ -606,6 +658,20 @@ app.post('/api/chat', async (req, res) => {
             }
 
             currentMessages.push(finalMessage);
+
+            // Guardrail: Detect unexecuted/malformed tools and retry
+            const issues = detectUnexecutedToolCalls(messageContent, finalMessage.tool_calls, reasoningContent);
+            if (issues.length > 0 && turnRetryCount < MAX_TURN_RETRIES) {
+                turnRetryCount++;
+                const feedback = `[GUARDRAIL] I detected issues with your last response's tool calls:\n${issues.map(i => `- ${i}`).join('\n')}\n\nPlease fix the format and try again. Remember to use valid JSON for arguments or the exact XML structure.`;
+                console.warn(feedback);
+                currentMessages.push({ role: "user", content: feedback });
+                res.write(`\n__GUARDRAIL_RETRY__:${JSON.stringify({ attempt: turnRetryCount, issues })}\n`);
+                continue;
+            }
+            
+            // Reset retry count for successful turn
+            turnRetryCount = 0;
 
             // Save assistant message to database
             if (chatId) {
