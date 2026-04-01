@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Textarea } from "@/components/ui/textarea"
-import { Send, Link as LinkIcon, X, Globe, Plus, Loader2, Trash2 } from "lucide-react"
+import { Send, Link as LinkIcon, X, Globe, Plus, Loader2, Trash2, MessageSquare, History } from "lucide-react"
 import { parseAIResponse } from "@/lib/ai-parser"
 
 import {
@@ -41,6 +41,7 @@ import {
 } from '@/components/ai-elements/reasoning'
 import { Loader } from "@/components/ai-elements/loader"
 import { Shimmer } from "@/components/ai-elements/shimmer"
+import { Skeleton } from "@/components/ui/skeleton"
 
 type ChatMessage = {
     role: 'user' | 'assistant' | 'system' | 'tool';
@@ -73,6 +74,81 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
     const [isAddingSource, setIsAddingSource] = useState(false)
     const [executingToolOutput, setExecutingToolOutput] = useState<Record<string, string>>({})
     const [currentStreamingTool, setCurrentStreamingTool] = useState<{ name: string, path: string } | null>(null)
+    const [chatId, setChatId] = useState<string | null>(null)
+    const [chats, setChats] = useState<{ id: string, title: string, createdAt: string }[]>([])
+    const [isHistoryOpen, setIsHistoryOpen] = useState(false)
+    const [isLoadingChats, setIsLoadingChats] = useState(false)
+    const [isLoadingMessages, setIsLoadingMessages] = useState(false)
+    const [deletingChatIds, setDeletingChatIds] = useState<Set<string>>(new Set())
+
+    useEffect(() => {
+        fetchChats();
+    }, []);
+
+    const fetchChats = async () => {
+        setIsLoadingChats(true);
+        try {
+            const res = await fetch('http://localhost:3000/api/chats');
+            const data = await res.json();
+            setChats(data);
+        } catch (e) {
+            console.error("Error fetching chats:", e);
+        } finally {
+            setIsLoadingChats(false);
+        }
+    };
+
+    const createNewChat = () => {
+        setChatId(null);
+        setMessages([]);
+        setSources([]);
+        setIsHistoryOpen(false);
+    };
+
+    const loadChat = async (id: string) => {
+        if (id === chatId) {
+            setIsHistoryOpen(false);
+            return;
+        }
+        setIsLoadingMessages(true);
+        try {
+            const res = await fetch(`http://localhost:3000/api/chats/${id}`);
+            const data = await res.json();
+            setMessages(data.map((m: any) => ({
+                role: m.role,
+                content: m.content,
+                thought: m.thought,
+                tool_calls: m.tool_calls
+            })));
+            setChatId(id);
+            setIsHistoryOpen(false);
+        } catch (e) {
+            console.error("Error loading chat:", e);
+        } finally {
+            setIsLoadingMessages(false);
+        }
+    };
+
+    const deleteChat = async (id: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setDeletingChatIds(prev => new Set(prev).add(id));
+        try {
+            await fetch(`http://localhost:3000/api/chats/${id}`, { method: 'DELETE' });
+            if (chatId === id) {
+                setChatId(null);
+                setMessages([]);
+            }
+            await fetchChats();
+        } catch (e) {
+            console.error("Error deleting chat:", e);
+        } finally {
+            setDeletingChatIds(prev => {
+                const updated = new Set(prev);
+                updated.delete(id);
+                return updated;
+            });
+        }
+    };
     const isPendingToolApproval = messages.some(msg => {
         if (msg.role !== 'assistant') return false;
         const matches = [...msg.content.matchAll(/<tool_approval_request [^>]*id="([^"]+)"/g)];
@@ -107,7 +183,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
         setSources(prev => prev.filter(s => s.url !== url));
     }
 
-    const callChat = async (history: ChatMessage[]) => {
+    const callChat = async (history: ChatMessage[], activeChatId?: string | null) => {
         setIsStreaming(true);
         setCurrentStreamingTool(null);
         try {
@@ -123,7 +199,8 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                         name: m.name
                     })),
                     model: model,
-                    sources: sources
+                    sources: sources,
+                    chatId: activeChatId || chatId
                 }),
             });
 
@@ -183,7 +260,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                         setCurrentStreamingTool(toolInfo);
                     } catch (e) { }
                 }
-                
+
                 // Extract speed
                 let sMatch;
                 while ((sMatch = speedRegex.exec(accumulatedResponse)) !== null) {
@@ -227,6 +304,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
         } finally {
             setIsStreaming(false);
             setCurrentStreamingTool(null);
+            if (chatId) fetchChats(); // Refresh title if it changed
         }
     };
 
@@ -239,7 +317,25 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
         setMessages([...newHistory, assistantMsg]);
         setIsStreaming(true);
         setInput("");
-        await callChat(newHistory);
+
+        let activeChatId = chatId;
+        if (!activeChatId) {
+            try {
+                const res = await fetch('http://localhost:3000/api/chats', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: input.substring(0, 30) })
+                });
+                const data = await res.json();
+                activeChatId = data.id;
+                setChatId(data.id);
+                fetchChats();
+            } catch (e) {
+                console.error("Error creating auto chat:", e);
+            }
+        }
+
+        await callChat(newHistory, activeChatId);
     };
 
     const handleApproveTool = async (call_id: string, command: string) => {
@@ -308,7 +404,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
             const updatedMessages = [...messages, toolMsg];
             setMessages([...updatedMessages, assistantMsg]);
             setIsStreaming(true);
-            await callChat(updatedMessages);
+            await callChat(updatedMessages, chatId);
         } catch (e) {
             console.error(e);
         } finally {
@@ -335,12 +431,7 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
         const updatedMessages = [...messages, toolMsg];
         setMessages([...updatedMessages, assistantMsg]);
         setIsStreaming(true);
-        await callChat(updatedMessages);
-    };
-
-    const handleClearChat = () => {
-        setMessages([]);
-        setSources([]);
+        await callChat(updatedMessages, chatId);
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -351,9 +442,8 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
     };
 
     return (
-        <div className="flex flex-col h-full bg-card text-foreground rounded-lg overflow-hidden border">
+        <div className="flex flex-col h-full bg-card text-foreground rounded-lg overflow-hidden border relative">
             <div className="p-2 border-b bg-muted/30 flex justify-between items-center px-4">
-                <span className="text-sm font-medium text-muted-foreground">Model</span>
                 <div className="flex items-center gap-2">
                     <TooltipProvider>
                         <Tooltip>
@@ -361,18 +451,43 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="cursor-pointer h-8 w-8 text-muted-foreground hover:text-destructive transition-colors"
-                                    onClick={handleClearChat}
-                                    disabled={isStreaming}
+                                    className="h-8 w-8 cursor-pointer text-muted-foreground hover:text-primary"
+                                    onClick={() => setIsHistoryOpen(!isHistoryOpen)}
                                 >
-                                    <Trash2 size={16} />
+                                    <History size={16} />
                                 </Button>
                             </TooltipTrigger>
-                            <TooltipContent side="bottom" align="center">
-                                <p>Clear Chat (Forget Context)</p>
+                            <TooltipContent side="bottom">
+                                <p>Chat History</p>
                             </TooltipContent>
                         </Tooltip>
                     </TooltipProvider>
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 cursor-pointer text-muted-foreground hover:text-primary"
+                                    onClick={createNewChat}
+                                >
+                                    <MessageSquare size={16} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                                <p>New Chat</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                    <span className="text-sm font-medium text-muted-foreground ml-2">
+                        {isLoadingMessages ? (
+                            <Skeleton className="h-4 w-32" />
+                        ) : (
+                            chatId ? chats.find(c => c.id === chatId)?.title || 'Current Chat' : 'New Chat'
+                        )}
+                    </span>
+                </div>
+                <div className="flex items-center gap-2">
                     <Select value={model} onValueChange={setModel}>
                         <SelectTrigger className="w-[180px] h-8 text-xs cursor-pointer">
                             <SelectValue placeholder="Select Model" />
@@ -385,7 +500,21 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
             </div>
             <Conversation className="flex-1 overflow-y-auto">
                 <ConversationContent className="p-4 space-y-4">
-                    {messages.filter(m => m.role !== 'tool').map((msg, idx) => {
+                    {isLoadingMessages ? (
+                        <div className="space-y-6">
+                            {[1, 2, 3].map(i => (
+                                <div key={i} className={`flex ${i % 2 === 0 ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`flex items-start gap-2 max-w-[80%] ${i % 2 === 0 ? 'flex-row-reverse' : ''}`}>
+                                        <Skeleton className="h-8 w-8 rounded-full shrink-0" />
+                                        <div className="space-y-2 mt-1">
+                                            <Skeleton className="h-4 w-[250px]" />
+                                            <Skeleton className="h-4 w-[200px]" />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : messages.filter(m => m.role !== 'tool').map((msg, idx) => {
                         const { thought, content, isThinking } = parseAIResponse(msg.content);
                         const assistantMessages = messages.filter(m => m.role === 'assistant');
                         const isLastAssistantMessage = msg.role === 'assistant' && msg === assistantMessages[assistantMessages.length - 1];
@@ -517,6 +646,64 @@ export function Agent({ onAcceptCode, onFileTouched }: AgentProps) {
                     </div>
                 </div>
             </div>
+
+            {isHistoryOpen && (
+                <div className="absolute inset-0 z-50 flex">
+                    <div className="w-64 bg-card border-r shadow-xl animate-in slide-in-from-left duration-200 flex flex-col">
+                        <div className="p-4 border-b flex justify-between items-center bg-muted/20">
+                            <h3 className="font-semibold text-sm">Recent Chats</h3>
+                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsHistoryOpen(false)}>
+                                <X size={14} />
+                            </Button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                            {isLoadingChats ? (
+                                Array.from({ length: 5 }).map((_, i) => (
+                                    <div key={i} className="p-2 space-y-2">
+                                        <Skeleton className="h-3 w-full" />
+                                    </div>
+                                ))
+                            ) : chats.map(chat => (
+                                <div
+                                    key={chat.id}
+                                    onClick={() => loadChat(chat.id)}
+                                    className={`group flex items-center justify-between p-2 rounded-md cursor-pointer text-xs transition-colors ${chatId === chat.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'}`}
+                                >
+                                    <span className="truncate flex-1 pr-2 text-sm">
+                                        {chat.title}
+                                    </span>
+                                    <button
+                                        onClick={(e) => deleteChat(chat.id, e)}
+                                        className={`p-1 hover:text-destructive transition-all cursor-pointer ${deletingChatIds.has(chat.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                                        disabled={deletingChatIds.has(chat.id)}
+                                    >
+                                        {deletingChatIds.has(chat.id) ? (
+                                            <Loader2 size={14} className="animate-spin" />
+                                        ) : (
+                                            <Trash2 size={14} />
+                                        )}
+                                    </button>
+                                </div>
+                            ))}
+                            {!isLoadingChats && chats.length === 0 && (
+                                <div className="text-center py-8 text-muted-foreground text-sm">
+                                    No history yet
+                                </div>
+                            )}
+                        </div>
+                        <div className="p-2 border-t">
+                            <Button
+                                variant="outline"
+                                className="w-full text-xs h-8 gap-2 cursor-pointer"
+                                onClick={createNewChat}
+                            >
+                                <Plus size={14} /> New Chat
+                            </Button>
+                        </div>
+                    </div>
+                    <div className="flex-1 bg-background/20 backdrop-blur-sm" onClick={() => setIsHistoryOpen(false)} />
+                </div>
+            )}
         </div>
     )
 }

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -7,11 +8,47 @@ const WebSocket = require('ws');
 const { spawn } = require('child_process');
 const pty = require('node-pty');
 const os = require('os');
+const { Sequelize, DataTypes } = require('sequelize');
 
 const axios = require('axios');
 const cheerio = require('cheerio');
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
+
+// Database Connection
+const sequelize = new Sequelize(
+    process.env.DB_NAME || 'vgu_cursor_clone',
+    process.env.DB_USER || 'root',
+    process.env.DB_PASSWORD || '',
+    {
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 3306,
+        dialect: 'mysql',
+        logging: false,
+    }
+);
+
+// Models
+const Chat = sequelize.define('Chat', {
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    title: { type: DataTypes.STRING, defaultValue: 'New Chat' },
+});
+
+const Message = sequelize.define('Message', {
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    role: { type: DataTypes.STRING, allowNull: false },
+    content: { type: DataTypes.TEXT, allowNull: false },
+    thought: { type: DataTypes.TEXT },
+    speed: { type: DataTypes.FLOAT },
+    tool_calls: { type: DataTypes.JSON },
+});
+
+Chat.hasMany(Message, { onDelete: 'CASCADE' });
+Message.belongsTo(Chat);
+
+sequelize.sync({ alter: true })
+    .then(() => console.log('Database & tables updated (alter: true)'))
+    .catch(err => console.error('Error syncing database:', err));
 app.use(cors());
 app.use(express.json());
 
@@ -214,6 +251,49 @@ const tools = {
     }
 };
 
+// --- History API ---
+
+app.get('/api/chats', async (req, res) => {
+    try {
+        const chats = await Chat.findAll({
+            order: [['createdAt', 'DESC']],
+        });
+        res.json(chats);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch chats", details: err.message });
+    }
+});
+
+app.post('/api/chats', async (req, res) => {
+    try {
+        const chat = await Chat.create({ title: req.body.title || 'New Chat' });
+        res.json(chat);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to create chat", details: err.message });
+    }
+});
+
+app.get('/api/chats/:id', async (req, res) => {
+    try {
+        const messages = await Message.findAll({
+            where: { ChatId: req.params.id },
+            order: [['createdAt', 'ASC']],
+        });
+        res.json(messages);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch messages", details: err.message });
+    }
+});
+
+app.delete('/api/chats/:id', async (req, res) => {
+    try {
+        await Chat.destroy({ where: { id: req.params.id } });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to delete chat", details: err.message });
+    }
+});
+
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 app.post('/api/fetch-url', async (req, res) => {
@@ -273,7 +353,34 @@ app.post('/api/execute-tool', async (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-    const { messages, model = 'Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf', sources = [] } = req.body;
+    const { messages, model = 'Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf', sources = [], chatId } = req.body;
+
+    // Save the last user message if chatId exists
+    if (chatId && messages.length > 0) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg.role === 'user') {
+            try {
+                const userMsg = await Message.create({
+                    role: lastMsg.role,
+                    content: lastMsg.content,
+                    ChatId: chatId
+                });
+                console.log('Saved user message:', userMsg.id);
+                
+                // If it's the first message, update chat title
+                if (messages.length === 1) {
+                    await Chat.update(
+                        { title: lastMsg.content.substring(0, 30) + (lastMsg.content.length > 30 ? '...' : '') },
+                        { where: { id: chatId } }
+                    );
+                    console.log('Updated chat title for:', chatId);
+                }
+            } catch (e) {
+                console.error("Error saving user message to database:", e);
+            }
+        }
+    }
+
     res.writeHead(200, {
         'Content-Type': 'text/plain; charset=utf-8',
         'Transfer-Encoding': 'chunked',
@@ -475,6 +582,22 @@ app.post('/api/chat', async (req, res) => {
 
             currentMessages.push(finalMessage);
 
+            // Save assistant message to database
+            if (chatId) {
+                try {
+                    const savedMsg = await Message.create({
+                        role: finalMessage.role,
+                        content: finalMessage.content,
+                        thought: reasoningContent,
+                        tool_calls: finalMessage.tool_calls,
+                        ChatId: chatId
+                    });
+                    console.log('Saved assistant turn message:', savedMsg.id);
+                } catch (e) {
+                    console.error("Error saving assistant message to database:", e);
+                }
+            }
+
             if (finalMessage.tool_calls) {
                 let stopLoop = false;
                 for (const tool_call of finalMessage.tool_calls) {
@@ -504,14 +627,45 @@ app.post('/api/chat', async (req, res) => {
                             name: tool_name,
                             content: JSON.stringify(result)
                         });
+
+                        // Save tool result to database
+                        if (chatId) {
+                            try {
+                                await Message.create({
+                                    role: "tool",
+                                    content: JSON.stringify(result),
+                                    tool_call_id: tool_call.id,
+                                    name: tool_name,
+                                    ChatId: chatId
+                                });
+                            } catch (e) {
+                                console.error("Error saving tool message:", e);
+                            }
+                        }
                     } catch (err) {
                         res.write(`\n<tool_done name="${tool_name}" error="true" />\n`);
-                        currentMessages.push({
+                        const errorMsg = {
                             role: "tool",
                             tool_call_id: tool_call.id,
                             name: tool_name,
                             content: JSON.stringify({ error: err.message })
-                        });
+                        };
+                        currentMessages.push(errorMsg);
+
+                        // Save tool error to database
+                        if (chatId) {
+                            try {
+                                await Message.create({
+                                    role: "tool",
+                                    content: errorMsg.content,
+                                    tool_call_id: tool_call.id,
+                                    name: tool_name,
+                                    ChatId: chatId
+                                });
+                            } catch (e) {
+                                console.error("Error saving tool error message:", e);
+                            }
+                        }
                     }
                 }
                 if (stopLoop) {
@@ -521,6 +675,7 @@ app.post('/api/chat', async (req, res) => {
                 running = false;
             }
         }
+
         res.end();
     } catch (error) {
         console.error('Error:', error);
