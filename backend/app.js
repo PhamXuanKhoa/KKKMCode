@@ -56,6 +56,35 @@ app.use(express.json());
 const WORKSPACE_DIR = path.resolve('./workspace');
 if (!fs.existsSync(WORKSPACE_DIR)) fs.mkdirSync(WORKSPACE_DIR);
 
+const isWin = os.platform() === 'win32';
+
+function getShellConfig(isInteractive = false) {
+    if (isWin) {
+        return {
+            shell: 'powershell.exe',
+            args: isInteractive ? ['-NoLogo'] : [],
+            env: {
+                ...process.env,
+                TERM: 'xterm-256color',
+                COLORTERM: 'truecolor',
+                FORCE_COLOR: '1'
+            }
+        };
+    } else {
+        const shell = process.env.SHELL || '/bin/bash';
+        return {
+            shell: shell,
+            args: isInteractive ? ['-l'] : [],
+            env: {
+                ...process.env,
+                TERM: 'xterm-256color',
+                COLORTERM: 'truecolor',
+                FORCE_COLOR: '1'
+            }
+        };
+    }
+}
+
 const tool_schemas = [
     {
         "type": "function",
@@ -232,9 +261,9 @@ const tools = {
     },
     execute_command: async ({ command }, onData) => {
         return new Promise((resolve) => {
-            const isWin = os.platform() === 'win32';
-            const shell = isWin ? 'powershell.exe' : 'bash';
-            const child = spawn(shell, [isWin ? '-Command' : '-c', command], { cwd: WORKSPACE_DIR });
+            const config = getShellConfig(false);
+            const args = isWin ? ['-Command', command] : ['-c', command];
+            const child = spawn(config.shell, args, { cwd: WORKSPACE_DIR, env: config.env });
             let output = '';
 
             child.stdout.on('data', d => {
@@ -778,38 +807,16 @@ wss.on('connection', (ws) => {
     console.log('Client connected');
     let shell = null;
     function startShell() {
-        if (shell && shell.pid) {
-            try { process.kill(-shell.pid, 'SIGKILL'); } catch (e) { }
+        if (shell) {
+            try { shell.kill(); } catch (e) { }
         }
-        const isWin = os.platform() === 'win32';
-        let cmd, args, env;
-        if (isWin) {
-            cmd = 'powershell.exe';
-            args = ['-NoLogo'];
-            env = {
-                ...process.env,
-                TERM: 'xterm-256color',
-                COLORTERM: 'truecolor',
-                FORCE_COLOR: '1'
-            };
-        } else {
-            cmd = 'bash';
-            args = [];
-            env = {
-                ...process.env,
-                COLUMNS: '200',
-                LINES: '50',
-                TERM: 'xterm-256color',
-                COLORTERM: 'truecolor',
-                FORCE_COLOR: '1'
-            };
-        }
-        shell = pty.spawn(cmd, args, {
+        const config = getShellConfig(true);
+        shell = pty.spawn(config.shell, config.args, {
             name: 'xterm-256color',
             cols: 80,
             rows: 30,
             cwd: WORKSPACE_DIR,
-            env: env,
+            env: config.env,
         });
 
         shell.on('data', (data) => {
