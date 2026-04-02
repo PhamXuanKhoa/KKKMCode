@@ -44,7 +44,7 @@ const sequelize = new Sequelize(
 // Models
 const Chat = sequelize.define('Chat', {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
-    title: { type: DataTypes.STRING, defaultValue: 'New Chat' },
+    title: { type: DataTypes.STRING, defaultValue: 'New chat' },
 });
 
 const Message = sequelize.define('Message', {
@@ -380,7 +380,7 @@ app.get('/api/chats', async (req, res) => {
 
 app.post('/api/chats', async (req, res) => {
     try {
-        const chat = await Chat.create({ title: req.body.title || 'New Chat' });
+        const chat = await Chat.create({ title: req.body.title || 'New chat' });
         res.json(chat);
     } catch (err) {
         res.status(500).json({ error: "Failed to create chat", details: err.message });

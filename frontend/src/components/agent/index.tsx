@@ -479,7 +479,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                                 </Button>
                             </TooltipTrigger>
                             <TooltipContent side="bottom">
-                                <p>Chat History</p>
+                                <p>Chat history</p>
                             </TooltipContent>
                         </Tooltip>
                     </TooltipProvider>
@@ -496,7 +496,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                                 </Button>
                             </TooltipTrigger>
                             <TooltipContent side="bottom">
-                                <p>New Chat</p>
+                                <p>New chat</p>
                             </TooltipContent>
                         </Tooltip>
                     </TooltipProvider>
@@ -504,7 +504,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                         {isLoadingMessages ? (
                             <Skeleton className="h-4 w-32" />
                         ) : (
-                            chatId ? chats.find(c => c.id === chatId)?.title || 'Current Chat' : 'New Chat'
+                            chatId ? chats.find(c => c.id === chatId)?.title || 'Current Chat' : 'New chat'
                         )}
                     </span>
                 </div>
@@ -671,7 +671,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                 <div className="absolute inset-0 z-50 flex">
                     <div className="w-64 bg-card border-r shadow-xl animate-in slide-in-from-left duration-200 flex flex-col">
                         <div className="p-4 border-b flex justify-between items-center bg-muted/20">
-                            <h3 className="font-semibold text-sm">Recent Chats</h3>
+                            <h3 className="font-semibold text-sm">Recent chats</h3>
                             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsHistoryOpen(false)}>
                                 <X size={14} />
                             </Button>
@@ -717,7 +717,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                                 className="w-full text-xs h-8 gap-2 cursor-pointer"
                                 onClick={createNewChat}
                             >
-                                <Plus size={14} /> New Chat
+                                <Plus size={14} /> New chat
                             </Button>
                         </div>
                     </div>
