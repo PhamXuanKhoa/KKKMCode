@@ -543,7 +543,7 @@ Filename: "${filename || 'unknown'}".`
 });
 
 app.post('/api/chat', async (req, res) => {
-    const { messages, model = 'Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf', sources = [], chatId } = req.body;
+    const { messages, model = 'Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf', sources = [], chatId, providerEndpoint } = req.body;
 
     // Save the last user message if chatId exists
     if (chatId && messages.length > 0) {
@@ -569,6 +569,20 @@ app.post('/api/chat', async (req, res) => {
                 console.error("Error saving user message to database:", e);
             }
         }
+    }
+
+    // Dynamic endpoint handling
+    let llmUrl = 'http://localhost:8080/v1/chat/completions';
+    if (providerEndpoint) {
+        let cleanEndpoint = providerEndpoint.trim();
+        if (!cleanEndpoint.startsWith('http')) {
+            cleanEndpoint = `http://${cleanEndpoint}`;
+        }
+        // If it's just a base URL (no path), append the OpenAI standard path
+        if (!cleanEndpoint.includes('/', cleanEndpoint.indexOf('://') + 3)) {
+            cleanEndpoint = cleanEndpoint.endsWith('/') ? `${cleanEndpoint}v1/chat/completions` : `${cleanEndpoint}/v1/chat/completions`;
+        }
+        llmUrl = cleanEndpoint;
     }
 
     res.writeHead(200, {
@@ -606,7 +620,7 @@ app.post('/api/chat', async (req, res) => {
             let isThoughtOpen = false;
             const sentToolStreamingMarkers = new Set();
 
-            const localResponse = await fetch('http://localhost:8080/v1/chat/completions', {
+            const localResponse = await fetch(llmUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

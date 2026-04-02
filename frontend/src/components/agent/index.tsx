@@ -99,18 +99,10 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
     const [newModelName, setNewModelName] = useState("");
     const [newModelEndpoint, setNewModelEndpoint] = useState("");
 
-    const allModels = [...DEFAULT_MODELS, ...customModels];
-    const currentModel = allModels.find(m => m.value === model) || allModels[0];
-    const baseEndpoint = currentModel?.endpoint.endsWith('/') ? currentModel.endpoint.slice(0, -1) : (currentModel?.endpoint || 'http://localhost:3000');
+    const BACKEND_URL = 'http://localhost:3000';
 
-    const getApiUrl = (path: string) => {
-        const cleanPath = path.startsWith('/') ? path : `/${path}`;
-        let endpoint = baseEndpoint;
-        if (!endpoint.startsWith('http')) {
-            endpoint = `http://${endpoint}`;
-        }
-        return `${endpoint}${cleanPath}`;
-    };
+    const allModels = [...DEFAULT_MODELS, ...customModels];
+    const currentModel = allModels.find(m => m.value === model) || DEFAULT_MODELS[0];
 
     useEffect(() => {
         localStorage.setItem('selected_model_value', model);
@@ -138,7 +130,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
     const fetchChats = async () => {
         setIsLoadingChats(true);
         try {
-            const res = await fetch(getApiUrl('/api/chats'));
+            const res = await fetch(`${BACKEND_URL}/api/chats`);
             const data = await res.json();
             setChats(data);
         } catch (e) {
@@ -162,7 +154,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         }
         setIsLoadingMessages(true);
         try {
-            const res = await fetch(getApiUrl(`/api/chats/${id}`));
+            const res = await fetch(`${BACKEND_URL}/api/chats/${id}`);
             const data = await res.json();
             setMessages(data.map((m: any) => ({
                 role: m.role,
@@ -183,7 +175,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         e.stopPropagation();
         setDeletingChatIds(prev => new Set(prev).add(id));
         try {
-            await fetch(getApiUrl(`/api/chats/${id}`), { method: 'DELETE' });
+            await fetch(`${BACKEND_URL}/api/chats/${id}`, { method: 'DELETE' });
             if (chatId === id) {
                 setChatId(null);
                 setMessages([]);
@@ -213,7 +205,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         if (!newUrl.trim() || isAddingSource) return;
         setIsAddingSource(true);
         try {
-            const res = await fetch(getApiUrl('/api/fetch-url'), {
+            const res = await fetch(`${BACKEND_URL}/api/fetch-url`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url: newUrl })
@@ -237,7 +229,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         setIsStreaming(true);
         setCurrentStreamingTool(null);
         try {
-            const response = await fetch(getApiUrl('/api/chat'), {
+            const response = await fetch(`${BACKEND_URL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -250,7 +242,8 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                     })),
                     model: model,
                     sources: sources,
-                    chatId: activeChatId || chatId
+                    chatId: activeChatId || chatId,
+                    providerEndpoint: currentModel?.endpoint
                 }),
             });
 
@@ -392,7 +385,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         let activeChatId = chatId;
         if (!activeChatId) {
             try {
-                const res = await fetch(getApiUrl('/api/chats'), {
+                const res = await fetch(`${BACKEND_URL}/api/chats`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title: input.substring(0, 30) })
@@ -424,7 +417,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         setExecutingToolOutput(prev => ({ ...prev, [call_id]: '' }));
 
         try {
-            const res = await fetch(getApiUrl('/api/execute-tool'), {
+            const res = await fetch(`${BACKEND_URL}/api/execute-tool`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ tool_name: 'execute_command', tool_args: { ...args, command: finalCommand } })
