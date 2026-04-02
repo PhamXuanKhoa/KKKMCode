@@ -12,8 +12,21 @@ const { Sequelize, DataTypes } = require('sequelize');
 
 const axios = require('axios');
 const cheerio = require('cheerio');
+const Groq = require('groq-sdk');
+console.log('Initializing Groq client with key:', process.env.GROQ_API_KEY ? 'Present' : 'Missing');
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
 const app = express();
 const port = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
 
 // Database Connection
 const sequelize = new Sequelize(
@@ -317,7 +330,7 @@ function detectUnexecutedToolCalls(messageContent, toolCalls, reasoningContent =
     if (messageContent.includes('<tool_call>') && !messageContent.includes('</tool_call>')) {
         issues.push("Missing closing </tool_call> tag.");
     }
-    
+
     const paramStarts = (messageContent.match(/<parameter=/g) || []).length;
     const paramEnds = (messageContent.match(/<\/parameter>/g) || []).length;
     if (paramStarts > paramEnds) {
@@ -327,7 +340,7 @@ function detectUnexecutedToolCalls(messageContent, toolCalls, reasoningContent =
     // 2. Check for missing tool calls if intent is detected (heuristic)
     const xmlIntent = messageContent.includes('<tool_call>') || messageContent.includes('<function=');
     const hasToolCalls = toolCalls && toolCalls.length > 0;
-    
+
     if (xmlIntent && !hasToolCalls) {
         issues.push("Found XML tool tags but no valid tool call was parsed. Ensure you use the exact format: <tool_call><function=name><parameter=name>value</parameter></function></tool_call>");
     }
@@ -453,6 +466,82 @@ app.post('/api/execute-tool', async (req, res) => {
     }
 });
 
+app.post('/api/predict-code', async (req, res) => {
+    const { prefix, suffix, filename, language } = req.body;
+    console.log('Received predict-code request for:', filename);
+    try {
+        if (!process.env.GROQ_API_KEY) {
+            throw new Error("GROQ_API_KEY is not set");
+        }
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                {
+                    role: "system",
+                    content: `You are an expert code completion engine. You will be provided with the PREFIX and SUFFIX of a file and you must generate the EXACT code to be inserted between them. 
+
+CRITICAL FORMATTING RULES:
+1. Output ONLY the code to fill the gap. No markdown, no explanations.
+2. If the gap starts a new block or statement (e.g. starting a new function after a completed one), you MUST start with one or two newlines (\\n).
+3. Match the indentation of the surrounding code perfectly.
+
+EXAMPLE 1 (Python):
+PREFIX: "def add(a, b):\\n    return a + b"
+SUFFIX: ""
+OUTPUT: "\\n\\ndef subtract(a, b):\\n    return a - b"
+
+EXAMPLE 2 (JavaScript):
+PREFIX: "const x = 10;"
+SUFFIX: ""
+OUTPUT: "\\nconst y = 20;"
+
+EXAMPLE 3 (Bridging):
+PREFIX: "return"
+SUFFIX: ""
+OUTPUT: " True"
+
+Target language: "${language || 'plaintext'}". 
+Filename: "${filename || 'unknown'}".`
+                },
+                {
+                    role: "user",
+                    content: `PREFIX:\n${prefix}\n\nSUFFIX:\n${suffix}`
+                }
+            ],
+            model: "qwen/qwen3-32b",
+            temperature: 0,
+            max_tokens: 256,
+            reasoning_effort: "none",
+            stop: ["SUFFIX:", "PREFIX:"]
+        });
+
+        let suggestedCode = completion.choices[0]?.message?.content || "";
+
+        // Heuristic 1: Prevent merged words (e.g. "returnTrue")
+        if (prefix && prefix.length > 0 && suggestedCode.length > 0) {
+            const lastChar = prefix[prefix.length - 1];
+            const firstChar = suggestedCode[0];
+            const isWordChar = (c) => /[a-zA-Z0-9_]/.test(c);
+            if (isWordChar(lastChar) && isWordChar(firstChar)) {
+                suggestedCode = ' ' + suggestedCode;
+            }
+        }
+
+        // Heuristic 2: Force newlines for structural blocks if at end of line
+        if (prefix && prefix.trim().length > 0 && !prefix.endsWith('\n')) {
+            const blockKeywords = ['def ', 'class ', 'if ', 'function ', 'export ', 'const ', 'let '];
+            if (blockKeywords.some(kw => suggestedCode.trimStart().startsWith(kw)) && !suggestedCode.startsWith('\n')) {
+                suggestedCode = '\n\n' + suggestedCode.trimStart();
+            }
+        }
+
+        res.json({ completion: suggestedCode });
+    } catch (e) {
+        console.error("Groq Completion Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/api/chat', async (req, res) => {
     const { messages, model = 'Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf', sources = [], chatId } = req.body;
 
@@ -467,7 +556,7 @@ app.post('/api/chat', async (req, res) => {
                     ChatId: chatId
                 });
                 console.log('Saved user message:', userMsg.id);
-                
+
                 // If it's the first message, update chat title
                 if (messages.length === 1) {
                     await Chat.update(
@@ -557,16 +646,16 @@ app.post('/api/chat', async (req, res) => {
                             const chunk = JSON.parse(trimmedLine.slice(6));
                             const delta = (chunk.choices && chunk.choices.length > 0) ? chunk.choices[0].delta : null;
 
-                             if (delta && delta.reasoning_content) {
-                                 if (!isThoughtOpen) {
-                                     res.write('<thought>\n');
-                                     isThoughtOpen = true;
-                                 }
-                                 // Sanitize literal thought tags from the model to avoid nesting
-                                 const sanitizedReasoning = delta.reasoning_content.replace(/<\/?thought[^>]*>/gi, '');
-                                 res.write(sanitizedReasoning);
-                                 reasoningContent += sanitizedReasoning;
-                             }
+                            if (delta && delta.reasoning_content) {
+                                if (!isThoughtOpen) {
+                                    res.write('<thought>\n');
+                                    isThoughtOpen = true;
+                                }
+                                // Sanitize literal thought tags from the model to avoid nesting
+                                const sanitizedReasoning = delta.reasoning_content.replace(/<\/?thought[^>]*>/gi, '');
+                                res.write(sanitizedReasoning);
+                                reasoningContent += sanitizedReasoning;
+                            }
 
                             if (delta && delta.content) {
                                 if (isThoughtOpen) {
@@ -655,7 +744,7 @@ app.post('/api/chat', async (req, res) => {
                 while ((pMatch = paramRegex.exec(parametersRaw)) !== null) {
                     args[pMatch[1].trim()] = pMatch[2].trim();
                 }
-                
+
                 if (!finalMessage.tool_calls) finalMessage.tool_calls = [];
                 // Only add if not already present (avoid duplicates if model uses both styles)
                 if (!finalMessage.tool_calls.some(tc => {
@@ -683,7 +772,7 @@ app.post('/api/chat', async (req, res) => {
                 finalMessage.tool_calls = [...existingCalls, ...toolCalls.filter(tc => tc)];
                 res.write(`\n__TOOL_CALLS__:${JSON.stringify(finalMessage.tool_calls)}\n`);
             } else if (finalMessage.tool_calls) {
-                 res.write(`\n__TOOL_CALLS__:${JSON.stringify(finalMessage.tool_calls)}\n`);
+                res.write(`\n__TOOL_CALLS__:${JSON.stringify(finalMessage.tool_calls)}\n`);
             }
 
             currentMessages.push(finalMessage);
@@ -698,7 +787,7 @@ app.post('/api/chat', async (req, res) => {
                 res.write(`\n__GUARDRAIL_RETRY__:${JSON.stringify({ attempt: turnRetryCount, issues })}\n`);
                 continue;
             }
-            
+
             // Reset retry count for successful turn
             turnRetryCount = 0;
 

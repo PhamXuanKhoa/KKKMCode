@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { getLanguageFromPath, normalizePath } from '@/lib/utils'
 import { MarkdownPreview } from './markdown-preview'
 import {
@@ -6,7 +6,7 @@ import {
     ResizablePanel,
     ResizablePanelGroup,
 } from "@/components/ui/resizable"
-import Editor, { DiffEditor } from "@monaco-editor/react"
+import Editor, { DiffEditor, loader } from "@monaco-editor/react"
 import { Terminal } from "@/components/terminal"
 import { Agent } from "@/components/agent"
 import { FileExplorer, type FileExplorerHandle } from "@/components/explorer"
@@ -41,6 +41,94 @@ export function ResizableDemo() {
     const currentFilePathRef = useRef<string>('')
     const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
     const fileExplorerRef = useRef<FileExplorerHandle>(null)
+
+    useEffect(() => {
+        let provider: monaco.IDisposable | null = null;
+        console.log('[GhostText] Static Monaco available:', !!monaco.languages);
+        
+        const initProvider = (m: any) => {
+            if (provider) return;
+            console.log('[GhostText] Registering provider with Monaco instance');
+            provider = m.languages.registerInlineCompletionsProvider({ pattern: '**' }, {
+                provideInlineCompletions: async (model: any, position: any, _context: any, token: any) => {
+                    const filePath = currentFilePathRef.current;
+                    console.info('[GhostText] Provider called!', { filePath, pos: position.lineNumber });
+
+                    if (!filePath || filePath.startsWith('virtual://')) {
+                        return { items: [] };
+                    }
+
+                    // Minimal debounce/throttling
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    if (token.isCancellationRequested) return { items: [] };
+
+                    const prefix = model.getValueInRange({
+                        startLineNumber: Math.max(1, position.lineNumber - 50),
+                        startColumn: 1,
+                        endLineNumber: position.lineNumber,
+                        endColumn: position.column,
+                    });
+                    const suffix = model.getValueInRange({
+                        startLineNumber: position.lineNumber,
+                        startColumn: position.column,
+                        endLineNumber: Math.min(model.getLineCount(), position.lineNumber + 50),
+                        endColumn: model.getLineMaxColumn(Math.min(model.getLineCount(), position.lineNumber + 50)),
+                    });
+
+                    try {
+                        console.info('[GhostText] Sending fetch request...');
+                        const response = await fetch('http://localhost:3000/api/predict-code', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                prefix,
+                                suffix,
+                                filename: filePath,
+                                language: model.getLanguageId(),
+                            }),
+                        });
+
+                        if (!response.ok) throw new Error(`API returned ${response.status}`);
+                        const data = await response.json();
+                        
+                        if (data.completion) {
+                            console.info('[GhostText] Suggestion received!');
+                            return {
+                                items: [
+                                    {
+                                        insertText: data.completion,
+                                        range: new monaco.Range(
+                                            position.lineNumber,
+                                            position.column,
+                                            position.lineNumber,
+                                            position.column
+                                        ),
+                                    },
+                                ],
+                            };
+                        }
+                    } catch (e) {
+                        console.error('[GhostText] Suggestion failed:', e);
+                    }
+                    return { items: [] };
+                },
+                disposeInlineCompletions: () => { }
+            });
+        };
+
+        // Try to initialize via loader or fallback to global monaco
+        loader.init().then(initProvider).catch(err => {
+            console.error('[GhostText] Loader initialization failed, falling back to global monaco', err);
+            if (monaco.languages) initProvider(monaco);
+        });
+
+        return () => { 
+            if (provider) {
+                console.log('[GhostText] Unregistering provider');
+                provider.dispose(); 
+            }
+        };
+    }, []);
 
     const handleFileSelect = (content: string, filePath: string, language?: string) => {
         const normalizedPath = normalizePath(filePath)
@@ -342,6 +430,15 @@ export function ResizableDemo() {
                                                                 handleSaveFile()
                                                             }
                                                         )
+
+                                                        let timer: any;
+                                                        modifiedEditor.onDidChangeCursorPosition(() => {
+                                                            if (timer) clearTimeout(timer);
+                                                            timer = setTimeout(() => {
+                                                                console.info('[GhostText] Idle trigger (DiffEditor)');
+                                                                modifiedEditor.trigger('keyboard', 'editor.action.inlineSuggest.trigger', {});
+                                                            }, 1000);
+                                                        });
                                                     }}
                                                     options={{
                                                         renderSideBySide: true,
@@ -349,6 +446,7 @@ export function ResizableDemo() {
                                                         originalEditable: false,
                                                         scrollBeyondLastLine: false,
                                                         automaticLayout: true,
+                                                        inlineSuggest: { enabled: true }
                                                     }}
                                                 />
                                             ) : (
@@ -378,6 +476,19 @@ export function ResizableDemo() {
                                                                         handleSaveFile()
                                                                     }
                                                                 )
+
+                                                                let timer: any;
+                                                                editor.onDidChangeCursorPosition(() => {
+                                                                    if (timer) clearTimeout(timer);
+                                                                    timer = setTimeout(() => {
+                                                                        console.info('[GhostText] Idle trigger (Editor)');
+                                                                        editor.trigger('keyboard', 'editor.action.inlineSuggest.trigger', {});
+                                                                    }, 1000);
+                                                                });
+                                                            }}
+                                                            options={{
+                                                                inlineSuggest: { enabled: true },
+                                                                quickSuggestions: { other: true, comments: true, strings: true }
                                                             }}
                                                         />
                                                     )}
