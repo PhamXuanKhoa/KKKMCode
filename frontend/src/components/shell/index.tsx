@@ -240,18 +240,6 @@ export function ResizableDemo() {
             })
     }
 
-    const handleAcceptCode = (code: string) => {
-        if (editorRef.current) {
-            editorRef.current.setValue(code)
-            setEditorContent(code)
-            if (activeFilePath) {
-                setOpenFiles(prev => prev.map(f =>
-                    f.path === activeFilePath ? { ...f, content: code, isDirty: true } : f
-                ))
-            }
-        }
-    }
-    
     const handleOpenTemporaryFile = (content: string, fileName: string) => {
         const virtualPath = `virtual://${fileName}`
         console.log('Opening virtual file:', virtualPath);
@@ -529,7 +517,7 @@ export function ResizableDemo() {
 
                 <ResizablePanel defaultSize={25} minSize={10}>
                     <div className="h-full bg-card">
-                        <Agent onAcceptCode={handleAcceptCode} onFileTouched={handleFileTouched} onOpenTemporaryFile={handleOpenTemporaryFile} />
+                        <Agent onFileTouched={handleFileTouched} onOpenTemporaryFile={handleOpenTemporaryFile} />
                     </div>
                 </ResizablePanel>
             </ResizablePanelGroup>

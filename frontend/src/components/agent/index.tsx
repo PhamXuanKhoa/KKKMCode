@@ -60,12 +60,11 @@ type Source = {
 }
 
 interface AgentProps {
-    onAcceptCode?: (code: string) => void;
     onFileTouched?: (path: string, originalContent?: string | null) => void;
     onOpenTemporaryFile?: (content: string, filename: string) => void;
 }
 
-export function Agent({ onAcceptCode, onFileTouched, onOpenTemporaryFile }: AgentProps) {
+export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [input, setInput] = useState("")
     const [isStreaming, setIsStreaming] = useState(false)
@@ -559,7 +558,6 @@ export function Agent({ onAcceptCode, onFileTouched, onOpenTemporaryFile }: Agen
                                             {content && (
                                                 <div className="flex flex-col gap-2 w-full">
                                                     <MessageResponse
-                                                        onAcceptCode={onAcceptCode}
                                                         onApproveTool={handleApproveTool}
                                                         onRejectTool={handleRejectTool}
                                                         toolStatuses={messages.reduce((acc, m) => {

@@ -1,9 +1,9 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Play, CheckCircle2, XCircle, Terminal } from "lucide-react";
+import { CheckCircle2, XCircle, Terminal, Copy, Check } from "lucide-react";
 import type { ComponentProps, HTMLAttributes } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // --- NEW IMPORTS FOR THE ACCEPT BUTTON ---
 import ReactMarkdown from 'react-markdown';
@@ -64,12 +64,6 @@ export const MessageActions = ({ className, children, ...props }: MessageActions
 // THE MODIFIED MESSAGE RESPONSE COMPONENT
 // ----------------------------------------------------------------------
 
-interface MessageResponseProps {
-  children: string;
-  className?: string;
-  onAcceptCode?: (code: string) => void; // <--- The new Prop
-}
-
 interface ToolExecutingProps {
   name: string;
 }
@@ -84,18 +78,15 @@ interface ToolApprovalProps {
 
 const ToolApproval = ({ command, id, onApprove, onReject }: ToolApprovalProps) => (
   <div className="flex flex-col gap-4 p-4 my-4 border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 rounded-md w-full">
-    {/* Header: Normal text, no eyebrow labels, no decorative orange glow */}
     <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 font-semibold text-sm">
       <Terminal size={16} strokeWidth={2.5} />
       <span>Approve command</span>
     </div>
 
-    {/* Code Block: Standard border, no fancy glass effects */}
     <div className="bg-zinc-50 dark:bg-zinc-900/50 p-3 rounded-sm border border-zinc-200 dark:border-zinc-800 font-mono text-[13px] leading-relaxed overflow-x-auto whitespace-pre text-zinc-700 dark:text-zinc-300">
       {command}
     </div>
 
-    {/* Actions: Normal buttons, 8px radius, no bounciness, clear hierarchy */}
     <div className="flex gap-2">
       <button
         onClick={() => onApprove(id, command)}
@@ -138,7 +129,6 @@ const ToolCompleted = ({ name, error }: { name: string; error?: boolean }) => (
 interface MessageResponseProps {
   children: string;
   className?: string;
-  onAcceptCode?: (code: string) => void;
   onApproveTool?: (id: string, command: string) => void;
   onRejectTool?: (id: string) => void;
   toolStatuses?: Record<string, { status: 'approved' | 'rejected', output: string }>;
@@ -181,7 +171,46 @@ const TerminalView = ({ command, output, isDone }: { command: string; output: st
   );
 };
 
-export const MessageResponse = ({ className, children, onAcceptCode, onApproveTool, onRejectTool, toolStatuses, executingToolOutput }: MessageResponseProps) => {
+const CopyButton = ({ text }: { text: string }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy!", err);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className={cn(
+        "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors cursor-pointer",
+        copied
+          ? "text-emerald-500 bg-emerald-500/10"
+          : "text-muted-foreground hover:text-primary hover:bg-primary/10"
+      )}
+      title={copied ? "Copied!" : "Copy code"}
+    >
+      {copied ? (
+        <>
+          <Check className="w-3 h-3" />
+          <span>Copied</span>
+        </>
+      ) : (
+        <>
+          <Copy className="w-3 h-3" />
+          <span>Copy</span>
+        </>
+      )}
+    </button>
+  );
+};
+
+export const MessageResponse = ({ className, children, onApproveTool, onRejectTool, toolStatuses, executingToolOutput }: MessageResponseProps) => {
   const markdownComponents = {
     code({ node, inline, className, children: codeChildren, ...props }: any) {
       const langMatch = /language-(\w+)/.exec(className || '');
@@ -194,16 +223,7 @@ export const MessageResponse = ({ className, children, onAcceptCode, onApproveTo
               <span className="text-xs font-mono text-muted-foreground">
                 {langMatch[1]}
               </span>
-              {onAcceptCode && (
-                <button
-                  onClick={() => onAcceptCode(codeString)}
-                  className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 rounded transition-colors"
-                  title="Replace editor content"
-                >
-                  <Play className="w-3 h-3" />
-                  Accept
-                </button>
-              )}
+              <CopyButton text={codeString} />
             </div>
             <SyntaxHighlighter
               {...props}
