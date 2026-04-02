@@ -210,8 +210,16 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
             const decoder = new TextDecoder();
             const startTime = Date.now();
             let accumulatedResponse = "";
-            let lastProcessedIndex = 0;
             let currentAssistantMsg: ChatMessage = { role: 'assistant', content: '' };
+            let lastFileTouchedIndex = 0;
+            let lastToolCallsIndex = 0;
+            let lastToolStreamingIndex = 0;
+            let lastSpeedIndex = 0;
+
+            const fileTouchedRegex = /__FILE_TOUCHED__:(.+)\n/g;
+            const toolCallsRegex = /__TOOL_CALLS__:(.+)\n/g;
+            const toolStreamingRegex = /__TOOL_STREAMING__:(.+)\n/g;
+            const speedRegex = /__SPEED__:(.+)\n/g;
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -220,20 +228,15 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                     accumulatedResponse += chunk;
                 }
 
-                // Parse indicators (do this before break to handle last chunk)
-                const fileTouchedRegex = /__FILE_TOUCHED__:(.+)\n/g;
-                const toolCallsRegex = /__TOOL_CALLS__:(.+)\n/g;
-                const toolStreamingRegex = /__TOOL_STREAMING__:(.+)\n/g;
-                const speedRegex = /__SPEED__:(.+)\n/g;
-
                 // Extract file touched
                 let match;
+                fileTouchedRegex.lastIndex = lastFileTouchedIndex;
                 while ((match = fileTouchedRegex.exec(accumulatedResponse)) !== null) {
                     try {
                         const info = JSON.parse(match[1]);
                         if (onFileTouched) onFileTouched(info.path.trim(), info.originalContent);
                     } catch (e) { }
-                    lastProcessedIndex = Math.max(lastProcessedIndex, fileTouchedRegex.lastIndex);
+                    lastFileTouchedIndex = fileTouchedRegex.lastIndex;
                 }
 
                 const displayContent = accumulatedResponse
@@ -244,31 +247,35 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
 
                 // Extract tool calls
                 let tcMatch;
+                toolCallsRegex.lastIndex = lastToolCallsIndex;
                 while ((tcMatch = toolCallsRegex.exec(accumulatedResponse)) !== null) {
                     try {
                         const toolCalls = JSON.parse(tcMatch[1]);
                         currentAssistantMsg.tool_calls = toolCalls;
                     } catch (e) { }
-                    lastProcessedIndex = Math.max(lastProcessedIndex, toolCallsRegex.lastIndex);
+                    lastToolCallsIndex = toolCallsRegex.lastIndex;
                 }
 
                 // Extract tool streaming
                 let tsMatch;
+                toolStreamingRegex.lastIndex = lastToolStreamingIndex;
                 while ((tsMatch = toolStreamingRegex.exec(accumulatedResponse)) !== null) {
                     try {
                         const toolInfo = JSON.parse(tsMatch[1]);
                         setCurrentStreamingTool(toolInfo);
                     } catch (e) { }
+                    lastToolStreamingIndex = toolStreamingRegex.lastIndex;
                 }
 
                 // Extract speed
                 let sMatch;
+                speedRegex.lastIndex = lastSpeedIndex;
                 while ((sMatch = speedRegex.exec(accumulatedResponse)) !== null) {
                     try {
                         const info = JSON.parse(sMatch[1]);
                         currentAssistantMsg.speed = info.tps;
                     } catch (e) { }
-                    lastProcessedIndex = Math.max(lastProcessedIndex, speedRegex.lastIndex);
+                    lastSpeedIndex = speedRegex.lastIndex;
                 }
 
                 const elapsedSeconds = (Date.now() - startTime) / 1000;
