@@ -43,9 +43,18 @@ export function ResizableDemo() {
     const fileExplorerRef = useRef<FileExplorerHandle>(null)
 
     useEffect(() => {
+        if (activeFilePath) {
+            const fileName = activeFilePath.split(/[\\/]/).pop() || 'Untitled'
+            document.title = fileName + " - KKKMCode"
+        } else {
+            document.title = 'KKKMCode'
+        }
+    }, [activeFilePath])
+
+    useEffect(() => {
         let provider: monaco.IDisposable | null = null;
         console.log('[GhostText] Static Monaco available:', !!monaco.languages);
-        
+
         const initProvider = (m: any) => {
             if (provider) return;
             console.log('[GhostText] Registering provider with Monaco instance');
@@ -90,7 +99,7 @@ export function ResizableDemo() {
 
                         if (!response.ok) throw new Error(`API returned ${response.status}`);
                         const data = await response.json();
-                        
+
                         if (data.completion) {
                             console.info('[GhostText] Suggestion received!');
                             return {
@@ -122,10 +131,10 @@ export function ResizableDemo() {
             if (monaco.languages) initProvider(monaco);
         });
 
-        return () => { 
+        return () => {
             if (provider) {
                 console.log('[GhostText] Unregistering provider');
-                provider.dispose(); 
+                provider.dispose();
             }
         };
     }, []);
