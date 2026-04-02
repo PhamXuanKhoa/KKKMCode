@@ -43,6 +43,22 @@ import { Loader } from "@/components/ai-elements/loader"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogFooter,
+} from "@/components/ui/dialog"
+import { Separator } from "@/components/ui/separator"
+
+interface CustomModel {
+    name: string;
+    value: string;
+    endpoint: string;
+}
+
+const DEFAULT_MODELS: CustomModel[] = [];
 
 type ChatMessage = {
     role: 'user' | 'assistant' | 'system' | 'tool';
@@ -69,7 +85,40 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [input, setInput] = useState("")
     const [isStreaming, setIsStreaming] = useState(false)
-    const [model, setModel] = useState("Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf")
+    const [customModels, setCustomModels] = useState<CustomModel[]>(() => {
+        const saved = localStorage.getItem('custom_models');
+        return saved ? JSON.parse(saved) : [];
+    });
+    const [model, setModel] = useState(() => {
+        const saved = localStorage.getItem('selected_model_value');
+        if (saved) return saved;
+        return DEFAULT_MODELS.length > 0 ? DEFAULT_MODELS[0].value : "";
+    });
+
+    const [isAddingModelOpen, setIsAddingModelOpen] = useState(false);
+    const [newModelName, setNewModelName] = useState("");
+    const [newModelEndpoint, setNewModelEndpoint] = useState("");
+
+    const allModels = [...DEFAULT_MODELS, ...customModels];
+    const currentModel = allModels.find(m => m.value === model) || allModels[0];
+    const baseEndpoint = currentModel?.endpoint.endsWith('/') ? currentModel.endpoint.slice(0, -1) : (currentModel?.endpoint || 'http://localhost:3000');
+
+    const getApiUrl = (path: string) => {
+        const cleanPath = path.startsWith('/') ? path : `/${path}`;
+        let endpoint = baseEndpoint;
+        if (!endpoint.startsWith('http')) {
+            endpoint = `http://${endpoint}`;
+        }
+        return `${endpoint}${cleanPath}`;
+    };
+
+    useEffect(() => {
+        localStorage.setItem('selected_model_value', model);
+    }, [model]);
+
+    useEffect(() => {
+        localStorage.setItem('custom_models', JSON.stringify(customModels));
+    }, [customModels]);
     const [sources, setSources] = useState<Source[]>([])
     const [newUrl, setNewUrl] = useState("")
     const [isAddingSource, setIsAddingSource] = useState(false)
@@ -89,7 +138,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
     const fetchChats = async () => {
         setIsLoadingChats(true);
         try {
-            const res = await fetch('http://localhost:3000/api/chats');
+            const res = await fetch(getApiUrl('/api/chats'));
             const data = await res.json();
             setChats(data);
         } catch (e) {
@@ -113,7 +162,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         }
         setIsLoadingMessages(true);
         try {
-            const res = await fetch(`http://localhost:3000/api/chats/${id}`);
+            const res = await fetch(getApiUrl(`/api/chats/${id}`));
             const data = await res.json();
             setMessages(data.map((m: any) => ({
                 role: m.role,
@@ -134,7 +183,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         e.stopPropagation();
         setDeletingChatIds(prev => new Set(prev).add(id));
         try {
-            await fetch(`http://localhost:3000/api/chats/${id}`, { method: 'DELETE' });
+            await fetch(getApiUrl(`/api/chats/${id}`), { method: 'DELETE' });
             if (chatId === id) {
                 setChatId(null);
                 setMessages([]);
@@ -164,7 +213,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         if (!newUrl.trim() || isAddingSource) return;
         setIsAddingSource(true);
         try {
-            const res = await fetch('http://localhost:3000/api/fetch-url', {
+            const res = await fetch(getApiUrl('/api/fetch-url'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url: newUrl })
@@ -188,7 +237,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         setIsStreaming(true);
         setCurrentStreamingTool(null);
         try {
-            const response = await fetch('http://localhost:3000/api/chat', {
+            const response = await fetch(getApiUrl('/api/chat'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -343,7 +392,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         let activeChatId = chatId;
         if (!activeChatId) {
             try {
-                const res = await fetch('http://localhost:3000/api/chats', {
+                const res = await fetch(getApiUrl('/api/chats'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title: input.substring(0, 30) })
@@ -375,7 +424,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
         setExecutingToolOutput(prev => ({ ...prev, [call_id]: '' }));
 
         try {
-            const res = await fetch('http://localhost:3000/api/execute-tool', {
+            const res = await fetch(getApiUrl('/api/execute-tool'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ tool_name: 'execute_command', tool_args: { ...args, command: finalCommand } })
@@ -515,11 +564,88 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                             <SelectValue placeholder="Select Model" />
                         </SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf">Qwen3.5-35B-A3B-Q4</SelectItem>
+                            {allModels.map((m) => (
+                                <div key={m.value} className="flex items-center group">
+                                    <SelectItem value={m.value} className="flex-1">
+                                        {m.name}
+                                    </SelectItem>
+                                    {!DEFAULT_MODELS.some(dm => dm.value === m.value) && (
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                const nextCustomModels = customModels.filter(cm => cm.value !== m.value);
+                                                setCustomModels(nextCustomModels);
+                                                if (model === m.value) {
+                                                    const remainingModels = [...DEFAULT_MODELS, ...nextCustomModels];
+                                                    setModel(remainingModels.length > 0 ? remainingModels[0].value : "");
+                                                }
+                                            }}
+                                            className="p-1 opacity-0 group-hover:opacity-100 hover:text-destructive transition-all cursor-pointer mr-2"
+                                        >
+                                            <Trash2 size={12} />
+                                        </button>
+                                    )}
+                                </div>
+                            ))}
+                            <Separator className="my-1" />
+                            <Button
+                                variant="ghost"
+                                className="w-full justify-start h-8 px-2 text-xs gap-2 rounded-none cursor-pointer hover:bg-muted"
+                                onClick={() => setIsAddingModelOpen(true)}
+                            >
+                                <Plus size={14} /> <span className="text-sm">Add new model</span>
+                            </Button>
                         </SelectContent>
                     </Select>
                 </div>
             </div>
+
+            <Dialog open={isAddingModelOpen} onOpenChange={setIsAddingModelOpen}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Add New Model</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Model Name</label>
+                            <Input
+                                placeholder="e.g. My Custom LLM"
+                                value={newModelName}
+                                onChange={(e) => setNewModelName(e.target.value)}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Endpoint</label>
+                            <Input
+                                placeholder="e.g. 192.168.1.100:3000"
+                                value={newModelEndpoint}
+                                onChange={(e) => setNewModelEndpoint(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsAddingModelOpen(false)}>Cancel</Button>
+                        <Button
+                            onClick={() => {
+                                if (!newModelName || !newModelEndpoint) return;
+                                const newModel: CustomModel = {
+                                    name: newModelName,
+                                    value: `${newModelName}-${Date.now()}`,
+                                    endpoint: newModelEndpoint
+                                };
+                                setCustomModels(prev => [...prev, newModel]);
+                                setModel(newModel.value);
+                                setIsAddingModelOpen(false);
+                                setNewModelName("");
+                                setNewModelEndpoint("");
+                            }}
+                            disabled={!newModelName || !newModelEndpoint}
+                        >
+                            Add Model
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
             <Conversation className="flex-1 overflow-y-auto">
                 <ConversationContent className="p-4 space-y-4">
                     {isLoadingMessages ? (
@@ -651,15 +777,15 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                     <div className="relative flex-1">
                         <Textarea
                             className="text-sm pr-12 min-h-[40px] max-h-[200px] resize-none py-2.5"
-                            placeholder={isPendingToolApproval ? "Please approve or decline the command before continuing..." : "Type your message here..."}
+                            placeholder={!model ? "Please add and select a model first..." : (isPendingToolApproval ? "Please approve or decline the command before continuing..." : "Type your message here...")}
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={handleKeyDown}
-                            disabled={isStreaming || isPendingToolApproval}
+                            disabled={isStreaming || isPendingToolApproval || !model}
                         />
                         <button
                             onClick={sendMessage}
-                            disabled={isStreaming || !input.trim() || isPendingToolApproval}
+                            disabled={isStreaming || !input.trim() || isPendingToolApproval || !model}
                             className="absolute right-2.5 bottom-2 p-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md disabled:opacity-50 transition-all font-semibold"
                         >
                             <Send size={16} />
