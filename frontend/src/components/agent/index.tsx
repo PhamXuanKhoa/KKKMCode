@@ -42,6 +42,7 @@ import {
 import { Loader } from "@/components/ai-elements/loader"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ScrollArea } from "@/components/ui/scroll-area"
 
 type ChatMessage = {
     role: 'user' | 'assistant' | 'system' | 'tool';
@@ -676,41 +677,43 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                                 <X size={14} />
                             </Button>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                            {isLoadingChats ? (
-                                Array.from({ length: 5 }).map((_, i) => (
-                                    <div key={i} className="p-2 space-y-2">
-                                        <Skeleton className="h-3 w-full" />
-                                    </div>
-                                ))
-                            ) : chats.map(chat => (
-                                <div
-                                    key={chat.id}
-                                    onClick={() => loadChat(chat.id)}
-                                    className={`group flex items-center justify-between p-2 rounded-md cursor-pointer text-xs transition-colors ${chatId === chat.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'}`}
-                                >
-                                    <span className="truncate flex-1 pr-2 text-sm">
-                                        {chat.title}
-                                    </span>
-                                    <button
-                                        onClick={(e) => deleteChat(chat.id, e)}
-                                        className={`p-1 hover:text-destructive transition-all cursor-pointer ${deletingChatIds.has(chat.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                                        disabled={deletingChatIds.has(chat.id)}
+                        <ScrollArea className="flex-1 min-h-0 w-full min-w-0">
+                            <div className="w-full p-2 pr-6 space-y-1">
+                                {isLoadingChats ? (
+                                    Array.from({ length: 5 }).map((_, i) => (
+                                        <div key={i} className="p-2 space-y-2">
+                                            <Skeleton className="h-3 w-full" />
+                                        </div>
+                                    ))
+                                ) : chats.map(chat => (
+                                    <div
+                                        key={chat.id}
+                                        onClick={() => loadChat(chat.id)}
+                                        className={`group flex items-center justify-between p-2 pr-5 rounded-md cursor-pointer text-xs transition-colors w-full min-w-0 ${chatId === chat.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'}`}
                                     >
-                                        {deletingChatIds.has(chat.id) ? (
-                                            <Loader2 size={14} className="animate-spin" />
-                                        ) : (
-                                            <Trash2 size={14} />
-                                        )}
-                                    </button>
-                                </div>
-                            ))}
-                            {!isLoadingChats && chats.length === 0 && (
-                                <div className="text-center py-8 text-muted-foreground text-sm">
-                                    No history yet
-                                </div>
-                            )}
-                        </div>
+                                        <span className="truncate flex-1 pr-2 text-sm">
+                                            {chat.title}
+                                        </span>
+                                        <button
+                                            onClick={(e) => deleteChat(chat.id, e)}
+                                            className={`p-1 mr-1 hover:text-destructive transition-all cursor-pointer ${deletingChatIds.has(chat.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                                            disabled={deletingChatIds.has(chat.id)}
+                                        >
+                                            {deletingChatIds.has(chat.id) ? (
+                                                <Loader2 size={14} className="animate-spin" />
+                                            ) : (
+                                                <Trash2 size={14} />
+                                            )}
+                                        </button>
+                                    </div>
+                                ))}
+                                {!isLoadingChats && chats.length === 0 && (
+                                    <div className="text-center py-8 text-muted-foreground text-sm">
+                                        No history yet
+                                    </div>
+                                )}
+                            </div>
+                        </ScrollArea>
                         <div className="p-2 border-t">
                             <Button
                                 variant="outline"
