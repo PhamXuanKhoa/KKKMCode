@@ -458,7 +458,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
     return (
         <div className="flex flex-col h-full bg-card text-foreground rounded-lg overflow-hidden border relative">
             <div className="p-2 border-b bg-muted/30 flex justify-between items-center px-4">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                     <TooltipProvider>
                         <Tooltip>
                             <TooltipTrigger asChild>
@@ -493,7 +493,7 @@ export function Agent({ onFileTouched, onOpenTemporaryFile }: AgentProps) {
                             </TooltipContent>
                         </Tooltip>
                     </TooltipProvider>
-                    <span className="text-sm font-medium text-muted-foreground ml-2">
+                    <span className="text-sm font-medium text-muted-foreground ml-2 truncate max-w-[200px]">
                         {isLoadingMessages ? (
                             <Skeleton className="h-4 w-32" />
                         ) : (
